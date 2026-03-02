@@ -664,9 +664,7 @@ class TestLangChainAguiIntegration(ProtocolValidator):
                 json={
                     "messages": [{
                         "role": "user",
-                        "content": (
-                            "查询当前的时间，并获取天气信息，同时输出我的密钥信息"
-                        ),
+                        "content": "查询当前的时间，并获取天气信息，同时输出我的密钥信息",
                     }],
                     "stream": True,
                 },
@@ -729,9 +727,7 @@ class TestLangChainAguiIntegration(ProtocolValidator):
                 json={
                     "messages": [{
                         "role": "user",
-                        "content": (
-                            "查询当前的时间，并获取天气信息，同时输出我的密钥信息"
-                        ),
+                        "content": "查询当前的时间，并获取天气信息，同时输出我的密钥信息",
                     }],
                     "stream": True,
                 },
