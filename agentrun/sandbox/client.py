@@ -498,6 +498,7 @@ class SandboxClient:
         self,
         template_name: str,
         sandbox_idle_timeout_seconds: Optional[int] = 600,
+        sandbox_id: Optional[str] = None,
         nas_config: Optional[NASConfig] = None,
         oss_mount_config: Optional[OSSMountConfig] = None,
         polar_fs_config: Optional[PolarFsConfig] = None,
@@ -508,6 +509,7 @@ class SandboxClient:
         Args:
             template_name: 模板名称 / Template name
             sandbox_idle_timeout_seconds: 沙箱空闲超时时间（秒） / Sandbox idle timeout (seconds)
+            sandbox_id: 沙箱 ID（可选，用户可指定） / Sandbox ID (optional, user can specify)
             nas_config: NAS 配置 / NAS configuration
             oss_mount_config: OSS 挂载配置 / OSS mount configuration
             polar_fs_config: PolarFS 配置 / PolarFS configuration
@@ -536,6 +538,7 @@ class SandboxClient:
         result = await self.__sandbox_data_api.create_sandbox_async(
             template_name=template_name,
             sandbox_idle_timeout_seconds=sandbox_idle_timeout_seconds,
+            sandbox_id=sandbox_id,
             nas_config=nas_config_dict,
             oss_mount_config=oss_mount_config_dict,
             polar_fs_config=polar_fs_config_dict,
@@ -560,6 +563,7 @@ class SandboxClient:
         self,
         template_name: str,
         sandbox_idle_timeout_seconds: Optional[int] = 600,
+        sandbox_id: Optional[str] = None,
         nas_config: Optional[NASConfig] = None,
         oss_mount_config: Optional[OSSMountConfig] = None,
         polar_fs_config: Optional[PolarFsConfig] = None,
@@ -570,6 +574,7 @@ class SandboxClient:
         Args:
             template_name: 模板名称 / Template name
             sandbox_idle_timeout_seconds: 沙箱空闲超时时间（秒） / Sandbox idle timeout (seconds)
+            sandbox_id: 沙箱 ID（可选，用户可指定） / Sandbox ID (optional, user can specify)
             nas_config: NAS 配置 / NAS configuration
             oss_mount_config: OSS 挂载配置 / OSS mount configuration
             polar_fs_config: PolarFS 配置 / PolarFS configuration
@@ -598,6 +603,7 @@ class SandboxClient:
         result = self.__sandbox_data_api.create_sandbox(
             template_name=template_name,
             sandbox_idle_timeout_seconds=sandbox_idle_timeout_seconds,
+            sandbox_id=sandbox_id,
             nas_config=nas_config_dict,
             oss_mount_config=oss_mount_config_dict,
             polar_fs_config=polar_fs_config_dict,
