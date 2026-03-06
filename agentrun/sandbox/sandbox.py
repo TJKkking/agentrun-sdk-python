@@ -257,6 +257,7 @@ class Sandbox(BaseModel):
             nas_config=nas_config,
             oss_mount_config=oss_mount_config,
             polar_fs_config=polar_fs_config,
+            config=config,
         )
 
         # 根据 template 类型转换为对应的子类实例
@@ -332,6 +333,7 @@ class Sandbox(BaseModel):
             nas_config=nas_config,
             oss_mount_config=oss_mount_config,
             polar_fs_config=polar_fs_config,
+            config=config,
         )
 
         # 根据 template 类型转换为对应的子类实例
@@ -361,66 +363,72 @@ class Sandbox(BaseModel):
         return sandbox
 
     @classmethod
-    async def stop_by_id_async(cls, sandbox_id: str):
+    async def stop_by_id_async(
+        cls, sandbox_id: str, config: Optional[Config] = None
+    ):
         """通过 ID 停止 Sandbox（异步）
 
         Args:
             sandbox_id: Sandbox ID
-            config: 配置对象
+            config: 配置对象 / Config object
 
         Returns:
             Sandbox: Sandbox 对象
         """
         if sandbox_id is None:
             raise ValueError("sandbox_id is required")
-        # todo 后续适配后使用 stop()
-        return await cls.__get_client().stop_sandbox_async(sandbox_id)
+        return await cls.__get_client().stop_sandbox_async(
+            sandbox_id, config=config
+        )
 
     @classmethod
-    def stop_by_id(cls, sandbox_id: str):
+    def stop_by_id(cls, sandbox_id: str, config: Optional[Config] = None):
         """通过 ID 停止 Sandbox（同步）
 
         Args:
             sandbox_id: Sandbox ID
-            config: 配置对象
+            config: 配置对象 / Config object
 
         Returns:
             Sandbox: Sandbox 对象
         """
         if sandbox_id is None:
             raise ValueError("sandbox_id is required")
-        # todo 后续适配后使用 stop()
-        return cls.__get_client().stop_sandbox(sandbox_id)
+        return cls.__get_client().stop_sandbox(sandbox_id, config=config)
 
     @classmethod
-    async def delete_by_id_async(cls, sandbox_id: str):
+    async def delete_by_id_async(
+        cls, sandbox_id: str, config: Optional[Config] = None
+    ):
         """通过 ID 删除 Sandbox（异步）
 
         Args:
             sandbox_id: Sandbox ID
-            config: 配置对象
+            config: 配置对象 / Config object
 
         Returns:
             Sandbox: Sandbox 对象
         """
         if sandbox_id is None:
             raise ValueError("sandbox_id is required")
-        return await cls.__get_client().delete_sandbox_async(sandbox_id)
+        return await cls.__get_client().delete_sandbox_async(
+            sandbox_id, config=config
+        )
 
     @classmethod
-    def delete_by_id(cls, sandbox_id: str):
+    def delete_by_id(cls, sandbox_id: str, config: Optional[Config] = None):
         """通过 ID 删除 Sandbox（同步）
 
         Args:
             sandbox_id: Sandbox ID
-            config: 配置对象
+            config: 配置对象 / Config object
 
         Returns:
             Sandbox: Sandbox 对象
         """
         if sandbox_id is None:
             raise ValueError("sandbox_id is required")
-        return cls.__get_client().delete_sandbox(sandbox_id)
+        return cls.__get_client().delete_sandbox(sandbox_id, config=config)
 
     @classmethod
     async def list_async(
@@ -866,34 +874,34 @@ class Sandbox(BaseModel):
         if self.sandbox_id is None:
             raise ValueError("sandbox_id is required to get a Sandbox")
 
-        return await self.connect_async(self.sandbox_id)
+        return await self.connect_async(self.sandbox_id, config=self._config)
 
     def get(self):
         if self.sandbox_id is None:
             raise ValueError("sandbox_id is required to get a Sandbox")
 
-        return self.connect(self.sandbox_id)
+        return self.connect(self.sandbox_id, config=self._config)
 
     async def delete_async(self):
         if self.sandbox_id is None:
             raise ValueError("sandbox_id is required to delete a Sandbox")
 
-        return await self.delete_by_id_async(self.sandbox_id)
+        return await self.delete_by_id_async(
+            self.sandbox_id, config=self._config
+        )
 
     def delete(self):
         if self.sandbox_id is None:
             raise ValueError("sandbox_id is required to delete a Sandbox")
 
-        return self.delete_by_id(self.sandbox_id)
+        return self.delete_by_id(self.sandbox_id, config=self._config)
 
     async def stop_async(self):
         if self.sandbox_id is None:
             raise ValueError("sandbox_id is required to stop a Sandbox")
-        # todo 后续适配后使用 stop()
-        return await self.stop_by_id_async(self.sandbox_id)
+        return await self.stop_by_id_async(self.sandbox_id, config=self._config)
 
     def stop(self):
         if self.sandbox_id is None:
             raise ValueError("sandbox_id is required to stop a Sandbox")
-        # todo 后续适配后使用 stop()
-        return self.stop_by_id(self.sandbox_id)
+        return self.stop_by_id(self.sandbox_id, config=self._config)

@@ -1111,3 +1111,316 @@ class TestSandboxInstanceHappyPath:
         sb = Sandbox(sandbox_id="sb-1")
         result = await sb.stop_async()
         assert result.sandbox_id == "sb-1"
+
+
+# ==================== Config 透传测试 ====================
+
+
+class TestSandboxConfigPassthrough:
+
+    @patch("agentrun.sandbox.client.SandboxControlAPI")
+    @patch("agentrun.sandbox.client.SandboxDataAPI")
+    def test_stop_by_id_passes_config(
+        self, mock_data_api_class, mock_control_api_class
+    ):
+        mock_data_api = MagicMock()
+        mock_data_api.stop_sandbox.return_value = {
+            "code": "SUCCESS",
+            "data": {"sandboxId": "sb-1"},
+        }
+        mock_data_api_class.return_value = mock_data_api
+
+        my_config = Config(headers={"X-Test": "val"})
+        Sandbox.stop_by_id("sb-1", config=my_config)
+        mock_data_api.stop_sandbox.assert_called_once_with(
+            "sb-1", config=my_config
+        )
+
+    @patch("agentrun.sandbox.client.SandboxControlAPI")
+    @patch("agentrun.sandbox.client.SandboxDataAPI")
+    @pytest.mark.asyncio
+    async def test_stop_by_id_async_passes_config(
+        self, mock_data_api_class, mock_control_api_class
+    ):
+        mock_data_api = MagicMock()
+        mock_data_api.stop_sandbox_async = AsyncMock(
+            return_value={
+                "code": "SUCCESS",
+                "data": {"sandboxId": "sb-1"},
+            }
+        )
+        mock_data_api_class.return_value = mock_data_api
+
+        my_config = Config(headers={"X-Test": "val"})
+        await Sandbox.stop_by_id_async("sb-1", config=my_config)
+        mock_data_api.stop_sandbox_async.assert_called_once_with(
+            "sb-1", config=my_config
+        )
+
+    @patch("agentrun.sandbox.client.SandboxControlAPI")
+    @patch("agentrun.sandbox.client.SandboxDataAPI")
+    def test_delete_by_id_passes_config(
+        self, mock_data_api_class, mock_control_api_class
+    ):
+        mock_data_api = MagicMock()
+        mock_data_api.delete_sandbox.return_value = {
+            "code": "SUCCESS",
+            "data": {"sandboxId": "sb-1"},
+        }
+        mock_data_api_class.return_value = mock_data_api
+
+        my_config = Config(headers={"X-Test": "val"})
+        Sandbox.delete_by_id("sb-1", config=my_config)
+        mock_data_api.delete_sandbox.assert_called_once_with(
+            "sb-1", config=my_config
+        )
+
+    @patch("agentrun.sandbox.client.SandboxControlAPI")
+    @patch("agentrun.sandbox.client.SandboxDataAPI")
+    @pytest.mark.asyncio
+    async def test_delete_by_id_async_passes_config(
+        self, mock_data_api_class, mock_control_api_class
+    ):
+        mock_data_api = MagicMock()
+        mock_data_api.delete_sandbox_async = AsyncMock(
+            return_value={
+                "code": "SUCCESS",
+                "data": {"sandboxId": "sb-1"},
+            }
+        )
+        mock_data_api_class.return_value = mock_data_api
+
+        my_config = Config(headers={"X-Test": "val"})
+        await Sandbox.delete_by_id_async("sb-1", config=my_config)
+        mock_data_api.delete_sandbox_async.assert_called_once_with(
+            "sb-1", config=my_config
+        )
+
+    @patch("agentrun.sandbox.client.SandboxControlAPI")
+    @patch("agentrun.sandbox.client.SandboxDataAPI")
+    def test_create_passes_config_to_create_sandbox(
+        self, mock_data_api_class, mock_control_api_class
+    ):
+        mock_control_api = MagicMock()
+        mock_control_api.get_template.return_value = MockTemplateData()
+        mock_control_api_class.return_value = mock_control_api
+
+        mock_data_api = MagicMock()
+        mock_data_api.create_sandbox.return_value = {
+            "code": "SUCCESS",
+            "data": {
+                "sandboxId": "sandbox-ci-123",
+                "templateName": "test-template",
+            },
+        }
+        mock_data_api_class.return_value = mock_data_api
+
+        my_config = Config(headers={"X-Test": "val"})
+        result = Sandbox.create(
+            template_type=TemplateType.CODE_INTERPRETER,
+            template_name="test-template",
+            config=my_config,
+        )
+        assert isinstance(result, CodeInterpreterSandbox)
+        call_kwargs = mock_data_api.create_sandbox.call_args
+        assert call_kwargs.kwargs.get("config") is my_config
+
+    @patch("agentrun.sandbox.client.SandboxControlAPI")
+    @patch("agentrun.sandbox.client.SandboxDataAPI")
+    @pytest.mark.asyncio
+    async def test_create_async_passes_config_to_create_sandbox(
+        self, mock_data_api_class, mock_control_api_class
+    ):
+        mock_control_api = MagicMock()
+        mock_control_api.get_template_async = AsyncMock(
+            return_value=MockTemplateData()
+        )
+        mock_control_api_class.return_value = mock_control_api
+
+        mock_data_api = MagicMock()
+        mock_data_api.create_sandbox_async = AsyncMock(
+            return_value={
+                "code": "SUCCESS",
+                "data": {
+                    "sandboxId": "sandbox-ci-123",
+                    "templateName": "test-template",
+                },
+            }
+        )
+        mock_data_api_class.return_value = mock_data_api
+
+        my_config = Config(headers={"X-Test": "val"})
+        result = await Sandbox.create_async(
+            template_type=TemplateType.CODE_INTERPRETER,
+            template_name="test-template",
+            config=my_config,
+        )
+        assert isinstance(result, CodeInterpreterSandbox)
+        call_kwargs = mock_data_api.create_sandbox_async.call_args
+        assert call_kwargs.kwargs.get("config") is my_config
+
+    @patch("agentrun.sandbox.client.SandboxControlAPI")
+    @patch("agentrun.sandbox.client.SandboxDataAPI")
+    def test_instance_stop_passes_self_config(
+        self, mock_data_api_class, mock_control_api_class
+    ):
+        mock_data_api = MagicMock()
+        mock_data_api.stop_sandbox.return_value = {
+            "code": "SUCCESS",
+            "data": {"sandboxId": "sb-1"},
+        }
+        mock_data_api_class.return_value = mock_data_api
+
+        my_config = Config(headers={"X-Test": "val"})
+        sb = Sandbox(sandbox_id="sb-1")
+        sb._config = my_config
+        sb.stop()
+        mock_data_api.stop_sandbox.assert_called_once_with(
+            "sb-1", config=my_config
+        )
+
+    @patch("agentrun.sandbox.client.SandboxControlAPI")
+    @patch("agentrun.sandbox.client.SandboxDataAPI")
+    @pytest.mark.asyncio
+    async def test_instance_stop_async_passes_self_config(
+        self, mock_data_api_class, mock_control_api_class
+    ):
+        mock_data_api = MagicMock()
+        mock_data_api.stop_sandbox_async = AsyncMock(
+            return_value={
+                "code": "SUCCESS",
+                "data": {"sandboxId": "sb-1"},
+            }
+        )
+        mock_data_api_class.return_value = mock_data_api
+
+        my_config = Config(headers={"X-Test": "val"})
+        sb = Sandbox(sandbox_id="sb-1")
+        sb._config = my_config
+        await sb.stop_async()
+        mock_data_api.stop_sandbox_async.assert_called_once_with(
+            "sb-1", config=my_config
+        )
+
+    @patch("agentrun.sandbox.client.SandboxControlAPI")
+    @patch("agentrun.sandbox.client.SandboxDataAPI")
+    def test_instance_delete_passes_self_config(
+        self, mock_data_api_class, mock_control_api_class
+    ):
+        mock_data_api = MagicMock()
+        mock_data_api.delete_sandbox.return_value = {
+            "code": "SUCCESS",
+            "data": {"sandboxId": "sb-1"},
+        }
+        mock_data_api_class.return_value = mock_data_api
+
+        my_config = Config(headers={"X-Test": "val"})
+        sb = Sandbox(sandbox_id="sb-1")
+        sb._config = my_config
+        sb.delete()
+        mock_data_api.delete_sandbox.assert_called_once_with(
+            "sb-1", config=my_config
+        )
+
+    @patch("agentrun.sandbox.client.SandboxControlAPI")
+    @patch("agentrun.sandbox.client.SandboxDataAPI")
+    @pytest.mark.asyncio
+    async def test_instance_delete_async_passes_self_config(
+        self, mock_data_api_class, mock_control_api_class
+    ):
+        mock_data_api = MagicMock()
+        mock_data_api.delete_sandbox_async = AsyncMock(
+            return_value={
+                "code": "SUCCESS",
+                "data": {"sandboxId": "sb-1"},
+            }
+        )
+        mock_data_api_class.return_value = mock_data_api
+
+        my_config = Config(headers={"X-Test": "val"})
+        sb = Sandbox(sandbox_id="sb-1")
+        sb._config = my_config
+        await sb.delete_async()
+        mock_data_api.delete_sandbox_async.assert_called_once_with(
+            "sb-1", config=my_config
+        )
+
+    @patch("agentrun.sandbox.client.SandboxControlAPI")
+    @patch("agentrun.sandbox.client.SandboxDataAPI")
+    def test_instance_get_passes_self_config(
+        self, mock_data_api_class, mock_control_api_class
+    ):
+        mock_control_api = MagicMock()
+        mock_control_api.get_template.return_value = MockTemplateData()
+        mock_control_api_class.return_value = mock_control_api
+
+        mock_data_api = MagicMock()
+        mock_data_api.get_sandbox.return_value = {
+            "code": "SUCCESS",
+            "data": {"sandboxId": "sb-1", "templateName": "tpl"},
+        }
+        mock_data_api_class.return_value = mock_data_api
+
+        my_config = Config(headers={"X-Test": "val"})
+        sb = Sandbox(sandbox_id="sb-1")
+        sb._config = my_config
+        sb.get()
+        mock_data_api.get_sandbox.assert_called_once_with(
+            "sb-1", config=my_config
+        )
+
+    @patch("agentrun.sandbox.client.SandboxControlAPI")
+    @patch("agentrun.sandbox.client.SandboxDataAPI")
+    @pytest.mark.asyncio
+    async def test_instance_get_async_passes_self_config(
+        self, mock_data_api_class, mock_control_api_class
+    ):
+        mock_control_api = MagicMock()
+        mock_control_api.get_template_async = AsyncMock(
+            return_value=MockTemplateData()
+        )
+        mock_control_api_class.return_value = mock_control_api
+
+        mock_data_api = MagicMock()
+        mock_data_api.get_sandbox_async = AsyncMock(
+            return_value={
+                "code": "SUCCESS",
+                "data": {"sandboxId": "sb-1", "templateName": "tpl"},
+            }
+        )
+        mock_data_api_class.return_value = mock_data_api
+
+        my_config = Config(headers={"X-Test": "val"})
+        sb = Sandbox(sandbox_id="sb-1")
+        sb._config = my_config
+        await sb.get_async()
+        mock_data_api.get_sandbox_async.assert_called_once_with(
+            "sb-1", config=my_config
+        )
+
+    @patch("agentrun.sandbox.client.SandboxControlAPI")
+    @patch("agentrun.sandbox.client.SandboxDataAPI")
+    def test_create_stores_config_on_instance(
+        self, mock_data_api_class, mock_control_api_class
+    ):
+        mock_control_api = MagicMock()
+        mock_control_api.get_template.return_value = MockTemplateData()
+        mock_control_api_class.return_value = mock_control_api
+
+        mock_data_api = MagicMock()
+        mock_data_api.create_sandbox.return_value = {
+            "code": "SUCCESS",
+            "data": {
+                "sandboxId": "sandbox-ci-123",
+                "templateName": "test-template",
+            },
+        }
+        mock_data_api_class.return_value = mock_data_api
+
+        my_config = Config(headers={"X-Test": "val"})
+        result = Sandbox.create(
+            template_type=TemplateType.CODE_INTERPRETER,
+            template_name="test-template",
+            config=my_config,
+        )
+        assert result._config is my_config
