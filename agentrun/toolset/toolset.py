@@ -122,6 +122,8 @@ class ToolSet(BaseModel):
                 None,
             )
 
+        return None
+
     async def get_async(self, config: Optional[Config] = None):
         if self.name is None:
             raise ValueError("ToolSet name is required to get the ToolSet.")
