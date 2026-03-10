@@ -26,6 +26,16 @@ except ImportError:
         pass
 
 
+try:
+    from greenlet import error as GreenletError
+except ImportError:
+
+    class GreenletError(Exception):  # type: ignore[no-redef]
+        """Fallback greenlet error used when greenlet is not installed."""
+
+        pass
+
+
 class SandboxToolSet(CommonToolSet):
     """沙箱工具集基类
 
@@ -836,28 +846,25 @@ class BrowserToolSet(SandboxToolSet):
                     "Browser tool-level error (no sandbox rebuild): %s", e
                 )
                 return {"error": f"{e!s}"}
-        except Exception as e:
-            error_msg = str(e)
-            if "cannot switch to" in error_msg:
+        except GreenletError as e:
+            logger.debug(
+                "Greenlet thread-binding error, resetting Playwright: %s",
+                e,
+            )
+            # Keep the existing sandbox (it is still healthy); only the
+            # Playwright connection needs to be recreated on this thread.
+            try:
+                self._reset_playwright()
+                return callback(sb)
+            except Exception as e2:
                 logger.debug(
-                    "Greenlet thread-binding error, resetting Playwright: %s",
-                    e,
+                    "Retry after Playwright reset failed: %s",
+                    e2,
                 )
-                # Reset only the Playwright connection and keep the existing sandbox
-                try:
-                    self._reset_playwright()
-                    # Retry once with the same sandbox instance; the original error
-                    # will still be returned if this retry fails.
-                    return callback(sb)
-                except Exception as e2:
-                    logger.debug(
-                        "Retry after Playwright reset failed: %s",
-                        e2,
-                    )
-                    return {"error": f"{e!s}"}
-            else:
-                logger.debug("Unexpected error in browser sandbox: %s", e)
                 return {"error": f"{e!s}"}
+        except Exception as e:
+            logger.debug("Unexpected error in browser sandbox: %s", e)
+            return {"error": f"{e!s}"}
 
     def _is_infrastructure_error(self, error_msg: str) -> bool:
         """判断是否为基础设施错误 / Check if error is infrastructure-level

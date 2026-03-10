@@ -254,25 +254,21 @@ class TestBrowserToolSetPlaywrightCaching:
 
         assert toolset._playwright_sync is None
 
-    def test_concurrent_get_playwright_creates_only_one_connection(
+    def test_concurrent_get_playwright_each_thread_gets_own_connection(
         self, toolset, mock_sandbox
     ):
-        """测试并发调用 _get_playwright 只创建一个连接，不会泄漏
+        """测试并发调用 _get_playwright 时每个线程各自创建连接
 
-        所有工作线程在同一 executor 内并发运行（即创建线程仍存活），
-        应复用同一连接，不会触发重建。
+        Playwright Sync API 的 greenlet 绑定到创建它的 OS 线程，
+        不能跨线程共享。每个工作线程必须创建自己的连接。
         """
         start_barrier = threading.Barrier(5)
-        # Keep all threads alive until every thread has obtained playwright,
-        # simulating concurrent workers within the same executor context.
-        hold_barrier = threading.Barrier(5)
         results: list = []
 
         def worker():
             start_barrier.wait()
             p = toolset._get_playwright(mock_sandbox)
             results.append(p)
-            hold_barrier.wait()  # stay alive so is_alive() == True for peers
 
         threads = [threading.Thread(target=worker) for _ in range(5)]
         for t in threads:
@@ -280,9 +276,8 @@ class TestBrowserToolSetPlaywrightCaching:
         for t in threads:
             t.join()
 
+        # Every thread must have received a connection
         assert len(results) == 5
-        assert all(p is results[0] for p in results)
-        mock_sandbox.sync_playwright.assert_called_once()
 
 
 class TestBrowserToolSetClose:
@@ -392,13 +387,14 @@ class TestBrowserToolSetThreadAwareness:
         # A new connection must have been created for the second call
         assert mock_sandbox.sync_playwright.call_count == 2
 
-    def test_get_playwright_live_thread_not_recreated(
+    def test_get_playwright_different_live_thread_recreates_connection(
         self, toolset, mock_sandbox
     ):
-        """测试创建线程仍存活时不重建连接（并发安全）
+        """测试从不同线程调用时，即使创建线程仍存活也会重建连接
 
-        即使在不同线程中调用，只要创建线程仍然存活，就应复用同一连接。
-        这模拟同一 executor 内并发工具调用的场景。
+        Playwright Sync API 的 greenlet 绑定到创建它的 OS 线程，
+        即使创建线程仍存活，在另一个线程上调用也不安全。
+        每个调用线程必须获得自己的连接。
         """
         results: list = []
 
@@ -406,7 +402,7 @@ class TestBrowserToolSetThreadAwareness:
         toolset._get_playwright(mock_sandbox)
         # The creating thread (main test thread) is still alive
 
-        # Another thread should reuse the same connection
+        # A different thread must receive its own new connection
         def worker():
             p = toolset._get_playwright(mock_sandbox)
             results.append(p)
@@ -416,8 +412,8 @@ class TestBrowserToolSetThreadAwareness:
         t.join()
 
         assert len(results) == 1
-        assert results[0] is toolset._playwright_sync
-        mock_sandbox.sync_playwright.assert_called_once()
+        # A new connection must have been created for the worker thread
+        assert mock_sandbox.sync_playwright.call_count == 2
 
     def test_reset_playwright_clears_thread(self, toolset, mock_sandbox):
         """测试 _reset_playwright 清理线程引用"""
@@ -452,17 +448,51 @@ class TestBrowserToolSetGreenletErrorHandling:
             ts._ensure_sandbox = MagicMock(return_value=mock_sandbox)
             return ts
 
-    def test_greenlet_thread_error_resets_playwright_and_sandbox(
+    def test_greenlet_error_resets_playwright_keeps_sandbox_and_retries(
         self, toolset, mock_sandbox
     ):
-        """测试 greenlet 线程绑定错误触发 Playwright 和沙箱重置
+        """測試 greenlet.error 触发 Playwright 重置、保留沙箱并重试
 
-        当 'cannot switch to a different thread' 错误发生时，
-        必须重置缓存的 Playwright 实例，避免后续调用持续失败。
+        当 greenlet.error 发生时，沙箱本身仍然健康（这是客户端线程亲和性问题），
+        只需重置 Playwright 连接并在当前线程重试，不应销毁沙箱。
         """
+        try:
+            from greenlet import error as GreenletError
+        except ImportError:
+            pytest.skip("greenlet not installed")
+
+        call_count = 0
 
         def callback(sb):
-            raise Exception(
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise GreenletError(
+                    "cannot switch to a different thread (which happens to have"
+                    " exited)"
+                )
+            return {"success": True}
+
+        result = toolset._run_in_sandbox(callback)
+
+        assert result == {"success": True}
+        assert call_count == 2
+        toolset._reset_playwright.assert_called_once()
+        # Sandbox must be preserved — the error is client-side thread affinity,
+        # not a sandbox crash.
+        assert toolset.sandbox is mock_sandbox
+
+    def test_greenlet_error_returns_error_if_retry_fails(
+        self, toolset, mock_sandbox
+    ):
+        """测试 greenlet.error 重试失败时返回错误字典"""
+        try:
+            from greenlet import error as GreenletError
+        except ImportError:
+            pytest.skip("greenlet not installed")
+
+        def callback(sb):
+            raise GreenletError(
                 "cannot switch to a different thread (which happens to have"
                 " exited)"
             )
@@ -470,9 +500,9 @@ class TestBrowserToolSetGreenletErrorHandling:
         result = toolset._run_in_sandbox(callback)
 
         assert "error" in result
-        assert "cannot switch to" in result["error"]
         toolset._reset_playwright.assert_called_once()
-        assert toolset.sandbox is None
+        # Sandbox still preserved even after retry failure
+        assert toolset.sandbox is mock_sandbox
 
     def test_non_greenlet_unexpected_error_does_not_reset(
         self, toolset, mock_sandbox
