@@ -337,7 +337,9 @@ class TestBrowserToolSetThreadAwareness:
             ts.lock = threading.Lock()
             return ts
 
-    def test_get_playwright_records_creating_thread(self, toolset, mock_sandbox):
+    def test_get_playwright_records_creating_thread(
+        self, toolset, mock_sandbox
+    ):
         """测试 _get_playwright 记录创建连接的线程"""
         toolset._get_playwright(mock_sandbox)
 
