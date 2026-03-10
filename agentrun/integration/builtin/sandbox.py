@@ -843,11 +843,21 @@ class BrowserToolSet(SandboxToolSet):
                     "Greenlet thread-binding error, resetting Playwright: %s",
                     e,
                 )
-                self._reset_playwright()
-                self.sandbox = None
+                # Reset only the Playwright connection and keep the existing sandbox
+                try:
+                    self._reset_playwright()
+                    # Retry once with the same sandbox instance; the original error
+                    # will still be returned if this retry fails.
+                    return callback(sb)
+                except Exception as e2:
+                    logger.debug(
+                        "Retry after Playwright reset failed: %s",
+                        e2,
+                    )
+                    return {"error": f"{e!s}"}
             else:
                 logger.debug("Unexpected error in browser sandbox: %s", e)
-            return {"error": f"{e!s}"}
+                return {"error": f"{e!s}"}
 
     def _is_infrastructure_error(self, error_msg: str) -> bool:
         """判断是否为基础设施错误 / Check if error is infrastructure-level
