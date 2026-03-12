@@ -520,3 +520,33 @@ class TestBrowserToolSetGreenletErrorHandling:
         assert "error" in result
         toolset._reset_playwright.assert_not_called()
         assert toolset.sandbox is original_sandbox
+
+
+class TestBrowserNavigationDefaults:
+    """测试浏览器导航函数的默认参数 / Tests for browser navigation function defaults"""
+
+    def test_browser_navigate_back_default_wait_until_is_domcontentloaded(
+        self,
+    ):
+        """测试 browser_navigate_back 的 wait_until 默认值为 domcontentloaded"""
+        default = (
+            BrowserToolSet.browser_navigate_back.args_schema.model_fields[
+                "wait_until"
+            ].default
+        )
+        assert default == "domcontentloaded", (
+            f"Expected 'domcontentloaded' but got '{default}'"
+        )
+
+    def test_browser_go_forward_default_wait_until_is_domcontentloaded(
+        self,
+    ):
+        """测试 browser_go_forward 的 wait_until 默认值为 domcontentloaded"""
+        default = (
+            BrowserToolSet.browser_go_forward.args_schema.model_fields[
+                "wait_until"
+            ].default
+        )
+        assert default == "domcontentloaded", (
+            f"Expected 'domcontentloaded' but got '{default}'"
+        )
