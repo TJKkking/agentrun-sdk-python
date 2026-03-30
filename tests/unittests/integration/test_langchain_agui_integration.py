@@ -652,7 +652,9 @@ class TestLangChainAguiIntegration(ProtocolValidator):
             # 因为 astream_events 在 CI (Linux + uvicorn 线程) 环境中
             # 会出现 async generator 被提前取消或事件丢失的问题。
             converter = AgentRunConverter()
-            async for event in agent.astream(input_data, stream_mode="updates"):
+            async for event in agent.astream(  # type: ignore[call-overload]
+                input_data, stream_mode="updates"
+            ):
                 for item in converter.convert(event):
                     yield item
 
