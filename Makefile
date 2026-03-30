@@ -124,7 +124,7 @@ install-deps:
 		--python ${PYTHON_VERSION} \
 		--dev \
 		--all-extras \
-		-i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+		$(if $(CI),,-i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple)
 
 # ============================================================================
 # 测试和覆盖率
