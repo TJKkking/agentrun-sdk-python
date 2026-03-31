@@ -8,6 +8,7 @@ import io
 import os
 import shutil
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 import zipfile
 
 import httpx
@@ -16,6 +17,7 @@ import pydash
 from agentrun.utils.config import Config
 from agentrun.utils.log import logger
 from agentrun.utils.model import BaseModel
+from agentrun.utils.ram_signature import get_agentrun_signed_headers
 
 from .model import (
     McpConfig,
@@ -128,8 +130,19 @@ class Tool(BaseModel):
     tool_type: Optional[str] = None
     """工具类型(MCP/FUNCTIONCALL) / Tool type (MCP/FUNCTIONCALL)"""
 
+    create_method: Optional[str] = None
+    """工具创建方式 / Tool create method
+    MCP_REMOTE: 远程 MCP 服务器 / Remote MCP server
+    MCP_LOCAL: 本地 MCP 标准输入输出 / Local MCP stdio
+    MCP_BUNDLE: MCP 打包部署 / MCP bundle deployment
+    CODE_PACKAGE: 代码包部署 / Code package deployment
+    OPENAPI_IMPORT: OpenAPI 导入 / OpenAPI import
+    """
+
     version_id: Optional[str] = None
     """版本 ID / Version ID"""
+
+    _RAM_DATA_DOMAINS = ("agentrun-data", "funagent-data-pre")
 
     @classmethod
     def __get_client(cls, config: Optional[Config] = None):
@@ -238,20 +251,36 @@ class Tool(BaseModel):
                 self, "mcp_config.session_affinity", "MCP_SSE"
             )
 
+            # MCP_REMOTE + proxy_enabled=false 时直连外部服务，不走 RAM 鉴权
+            # Only skip RAM auth for MCP_REMOTE with proxy disabled (direct external connection)
+            is_mcp_remote_without_proxy = (
+                self.create_method == "MCP_REMOTE"
+                and not pydash.get(self, "mcp_config.proxy_enabled", False)
+            )
+
             cfg = Config.with_configs(config)
             session = ToolMCPSession(
                 endpoint=mcp_endpoint,
                 session_affinity=session_affinity,
                 headers=cfg.get_headers(),
+                config=cfg,
+                use_ram_auth=not is_mcp_remote_without_proxy,
             )
             return await session.list_tools_async()
 
         elif tool_type == ToolType.FUNCTIONCALL:
             from .api.openapi import ToolOpenAPIClient
 
+            # OPENAPI_IMPORT 时 server 是外部服务，不走 RAM 鉴权
+            # Skip RAM auth for OPENAPI_IMPORT since the server is an external service
+            is_openapi_import = self.create_method == "OPENAPI_IMPORT"
+
+            cfg = Config.with_configs(config)
             openapi_client = ToolOpenAPIClient(
                 protocol_spec=self.protocol_spec,
                 fallback_server_url=self._get_functioncall_server_url(config),
+                config=cfg,
+                use_ram_auth=not is_openapi_import,
             )
             return await openapi_client.list_tools_async()
 
@@ -290,11 +319,20 @@ class Tool(BaseModel):
                 self, "mcp_config.session_affinity", "MCP_SSE"
             )
 
+            # MCP_REMOTE + proxy_enabled=false 时直连外部服务，不走 RAM 鉴权
+            # Only skip RAM auth for MCP_REMOTE with proxy disabled (direct external connection)
+            is_mcp_remote_without_proxy = (
+                self.create_method == "MCP_REMOTE"
+                and not pydash.get(self, "mcp_config.proxy_enabled", False)
+            )
+
             cfg = Config.with_configs(config)
             session = ToolMCPSession(
                 endpoint=mcp_endpoint,
                 session_affinity=session_affinity,
                 headers=cfg.get_headers(),
+                config=cfg,
+                use_ram_auth=not is_mcp_remote_without_proxy,
             )
             result = await session.call_tool_async(name, arguments)
             logger.debug("invoke tool %s got result %s", name, result)
@@ -303,17 +341,100 @@ class Tool(BaseModel):
         elif tool_type == ToolType.FUNCTIONCALL:
             from .api.openapi import ToolOpenAPIClient
 
+            # OPENAPI_IMPORT 时 server 是外部服务，不走 RAM 鉴权
+            # Skip RAM auth for OPENAPI_IMPORT since the server is an external service
+            is_openapi_import = self.create_method == "OPENAPI_IMPORT"
+
             cfg = Config.with_configs(config)
             openapi_client = ToolOpenAPIClient(
                 protocol_spec=self.protocol_spec,
                 headers=cfg.get_headers(),
                 fallback_server_url=self._get_functioncall_server_url(config),
+                config=cfg,
+                use_ram_auth=not is_openapi_import,
             )
             result = await openapi_client.call_tool_async(name, arguments)
             logger.debug("invoke tool %s got result %s", name, result)
             return result
 
         raise ValueError(f"Unsupported tool type: {self.tool_type}")
+
+    def _use_ram_auth(self, config: Optional[Config] = None) -> bool:
+        """是否使用 RAM 签名鉴权（配置了 AK/SK 时使用）。
+        Whether to use RAM signature authentication (when AK/SK is configured).
+        """
+        cfg = Config.with_configs(config)
+        return bool(cfg.get_access_key_id() and cfg.get_access_key_secret())
+
+    def _get_ram_data_endpoint(
+        self, url: str, config: Optional[Config] = None
+    ) -> str:
+        """返回 RAM 鉴权用的 data endpoint（仅当 agentrun-data / funagent-data-pre 域名时在 host 前加 -ram）。
+        Return RAM-authenticated endpoint (add -ram prefix for agentrun-data / funagent-data-pre domains).
+        """
+        parsed = urlparse(url)
+        if not parsed.netloc or not any(
+            f".{domain}." in parsed.netloc for domain in self._RAM_DATA_DOMAINS
+        ):
+            return url
+        parts = parsed.netloc.split(".", 1)
+        if len(parts) != 2:
+            return url
+        ram_netloc = parts[0] + "-ram." + parts[1]
+
+        from urllib.parse import urlunparse
+
+        return urlunparse((
+            parsed.scheme,
+            ram_netloc,
+            parsed.path,
+            parsed.params,
+            parsed.query,
+            parsed.fragment,
+        ))
+
+    def _get_auth_headers(
+        self, url: str, config: Optional[Config] = None
+    ) -> Dict[str, str]:
+        """获取认证请求头，支持 RAM 签名。
+        Get authentication headers with RAM signature support.
+
+        Args:
+            url: 请求 URL / Request URL
+            config: 配置对象 / Configuration object
+
+        Returns:
+            Dict[str, str]: 包含认证信息的请求头 / Headers with authentication
+        """
+        cfg = Config.with_configs(config)
+        headers = cfg.get_headers()
+
+        if self._use_ram_auth(cfg):
+            # 使用 RAM 端点
+            ram_url = self._get_ram_data_endpoint(url, cfg)
+            try:
+                signed = get_agentrun_signed_headers(
+                    url=ram_url,
+                    method="GET",
+                    access_key_id=cfg.get_access_key_id(),
+                    access_key_secret=cfg.get_access_key_secret(),
+                    security_token=cfg.get_security_token() or None,
+                    region=cfg.get_region_id(),
+                    product="agentrun",
+                    body=None,
+                )
+                headers = {
+                    **signed,
+                    **headers,
+                }
+                logger.debug(
+                    "using RAM signature for skill download to %s",
+                    ram_url[:80] + "..." if len(ram_url) > 80 else ram_url,
+                )
+            except ValueError as e:
+                logger.warning("RAM signing skipped (missing AK/SK): %s", e)
+
+        return headers
 
     def _get_skill_download_url(
         self, config: Optional[Config] = None
@@ -376,7 +497,7 @@ class Tool(BaseModel):
         logger.debug("downloading skill from %s to %s", download_url, skill_dir)
 
         cfg = Config.with_configs(config)
-        headers = cfg.get_headers()
+        headers = self._get_auth_headers(download_url, cfg)
 
         async with httpx.AsyncClient(
             timeout=300, follow_redirects=True

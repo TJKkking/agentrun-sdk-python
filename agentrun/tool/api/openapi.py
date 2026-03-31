@@ -7,12 +7,84 @@ extracts operations as ToolInfo list, and makes HTTP calls via Server URL.
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Generator, List, Optional
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 
 from agentrun.tool.model import ToolInfo, ToolSchema
+from agentrun.utils.config import Config
 from agentrun.utils.log import logger
+from agentrun.utils.ram_signature import get_agentrun_signed_headers
+
+
+class _AgentrunRamAuth(httpx.Auth):
+    """httpx Auth handler：为每次请求动态生成 RAM 签名。"""
+
+    def __init__(
+        self,
+        access_key_id: str,
+        access_key_secret: str,
+        region: str,
+        security_token: Optional[str] = None,
+    ):
+        self._ak = access_key_id
+        self._sk = access_key_secret
+        self._region = region
+        self._security_token = security_token
+
+    def auth_flow(
+        self, request: httpx.Request
+    ) -> Generator[httpx.Request, httpx.Response, None]:
+        url = str(request.url)
+        method = request.method
+
+        body: Optional[bytes] = None
+        if request.content:
+            body = request.content
+
+        content_type: Optional[str] = request.headers.get("content-type")
+
+        try:
+            signed = get_agentrun_signed_headers(
+                url=url,
+                method=method,
+                access_key_id=self._ak,
+                access_key_secret=self._sk,
+                security_token=self._security_token,
+                region=self._region,
+                product="agentrun",
+                body=body,
+                content_type=content_type,
+            )
+            for k, v in signed.items():
+                request.headers[k] = v
+            logger.debug(
+                "applied RAM signature for OpenAPI %s request to %s",
+                method,
+                url[:80] + ("..." if len(url) > 80 else ""),
+            )
+        except ValueError as e:
+            logger.warning("RAM signing skipped for OpenAPI request: %s", e)
+
+        yield request
+
+
+def _rewrite_to_ram_url(url: str) -> str:
+    """将 agentrun-data 域名改写为 -ram 端点。"""
+    parsed = urlparse(url)
+    parts = parsed.netloc.split(".", 1)
+    if len(parts) == 2:
+        ram_netloc = parts[0] + "-ram." + parts[1]
+        return urlunparse((
+            parsed.scheme,
+            ram_netloc,
+            parsed.path or "",
+            parsed.params,
+            parsed.query,
+            parsed.fragment,
+        ))
+    return url
 
 
 class ToolOpenAPIClient:
@@ -27,6 +99,8 @@ class ToolOpenAPIClient:
         protocol_spec: Optional[str] = None,
         headers: Optional[Dict[str, str]] = None,
         fallback_server_url: Optional[str] = None,
+        config: Optional[Config] = None,
+        use_ram_auth: bool = True,
     ):
         """初始化 OpenAPI 客户端 / Initialize OpenAPI client
 
@@ -35,11 +109,17 @@ class ToolOpenAPIClient:
             headers: 请求头 / Request headers
             fallback_server_url: 当 OpenAPI spec 中没有 servers 时的备用 URL /
                 Fallback URL when servers is not present in OpenAPI spec
+            config: 配置对象 / Configuration object
+            use_ram_auth: 是否启用 RAM 签名鉴权 / Whether to enable RAM signature auth.
+                OPENAPI_IMPORT 时设为 False（server 是外部服务）。
+                Set to False for OPENAPI_IMPORT (server is an external service).
         """
         self.headers = headers or {}
         self._fallback_server_url = fallback_server_url
         self._spec: Optional[Dict[str, Any]] = None
         self._operations: Optional[List[Dict[str, Any]]] = None
+        self.config = Config.with_configs(config)
+        self.use_ram_auth = use_ram_auth
 
         if protocol_spec:
             try:
@@ -258,11 +338,16 @@ class ToolOpenAPIClient:
         url = f"{base_url.rstrip('/')}{target_operation['path']}"
         method = target_operation["method"]
 
+        # 应用 RAM 签名
+        url, auth = self._build_ram_auth(url)
+
         logger.debug(
             f"Calling FunctionCall tool: {method} {url} with args={arguments}"
         )
 
-        with httpx.Client(headers=self.headers, timeout=30.0) as client:
+        with httpx.Client(
+            headers=self.headers, timeout=30.0, auth=auth
+        ) as client:
             if method in ("POST", "PUT", "PATCH"):
                 response = client.request(method, url, json=arguments or {})
             else:
@@ -312,13 +397,16 @@ class ToolOpenAPIClient:
         url = f"{base_url.rstrip('/')}{target_operation['path']}"
         method = target_operation["method"]
 
+        # 应用 RAM 签名
+        url, auth = self._build_ram_auth(url)
+
         logger.debug(
             f"Calling FunctionCall tool async: {method} {url} with"
             f" args={arguments}"
         )
 
         async with httpx.AsyncClient(
-            headers=self.headers, timeout=30.0
+            headers=self.headers, timeout=30.0, auth=auth
         ) as client:
             if method in ("POST", "PUT", "PATCH"):
                 response = await client.request(
@@ -335,3 +423,37 @@ class ToolOpenAPIClient:
             if "application/json" in content_type:
                 return response.json()
             return response.text
+
+    def _build_ram_auth(self, url: str) -> tuple:
+        """当目标是 agentrun-data 域名时，改写 URL 并返回 httpx Auth handler。
+
+        Returns:
+            (rewritten_url, auth_or_none)
+        """
+        # OPENAPI_IMPORT 时 server 是外部服务，不走 RAM 鉴权
+        # Skip RAM auth for OPENAPI_IMPORT since the server is an external service
+        if not self.use_ram_auth:
+            return url, None
+
+        parsed = urlparse(url)
+        # 只对 agentrun-data 和 funagent-data-pre 域名应用 RAM 签名
+        if ".agentrun-data." not in (
+            parsed.netloc or ""
+        ) and ".funagent-data-pre." not in (parsed.netloc or ""):
+            return url, None
+
+        cfg = self.config
+        ak = cfg.get_access_key_id()
+        sk = cfg.get_access_key_secret()
+        if not ak or not sk:
+            return url, None
+
+        url = _rewrite_to_ram_url(url)
+
+        auth = _AgentrunRamAuth(
+            access_key_id=ak,
+            access_key_secret=sk,
+            region=cfg.get_region_id(),
+            security_token=cfg.get_security_token() or None,
+        )
+        return url, auth

@@ -296,7 +296,9 @@ class TestToolMCPSessionCallTool:
             new_callable=AsyncMock,
             return_value=expected_result,
         ):
-            with patch("asyncio.get_event_loop") as mock_get_loop:
+            with patch(
+                "agentrun.tool.api.mcp._get_or_create_event_loop"
+            ) as mock_get_loop:
                 mock_loop = MagicMock()
                 mock_loop.run_until_complete.return_value = expected_result
                 mock_get_loop.return_value = mock_loop
@@ -306,3 +308,57 @@ class TestToolMCPSessionCallTool:
 
                 assert result == expected_result
                 mock_loop.run_until_complete.assert_called_once()
+
+
+class TestGetOrCreateEventLoop:
+    """测试 _get_or_create_event_loop 辅助函数"""
+
+    def test_returns_existing_event_loop(self):
+        """测试在有事件循环的线程中返回现有循环"""
+        from agentrun.tool.api.mcp import _get_or_create_event_loop
+
+        with patch("agentrun.tool.api.mcp.asyncio.get_event_loop") as mock_get:
+            mock_loop = MagicMock()
+            mock_get.return_value = mock_loop
+
+            result = _get_or_create_event_loop()
+
+            assert result is mock_loop
+            mock_get.assert_called_once()
+
+    def test_creates_new_event_loop_when_none_exists(self):
+        """测试在无事件循环的线程中创建新循环（模拟 Python 3.10+ 非主线程行为）"""
+        from agentrun.tool.api.mcp import _get_or_create_event_loop
+
+        with patch(
+            "agentrun.tool.api.mcp.asyncio.get_event_loop",
+            side_effect=RuntimeError("no event loop"),
+        ):
+            with patch(
+                "agentrun.tool.api.mcp.asyncio.new_event_loop"
+            ) as mock_new:
+                with patch(
+                    "agentrun.tool.api.mcp.asyncio.set_event_loop"
+                ) as mock_set:
+                    mock_loop = MagicMock()
+                    mock_new.return_value = mock_loop
+
+                    result = _get_or_create_event_loop()
+
+                    assert result is mock_loop
+                    mock_new.assert_called_once()
+                    mock_set.assert_called_once_with(mock_loop)
+
+    def test_works_in_thread_pool_executor(self):
+        """测试在 ThreadPoolExecutor 线程中能正常工作"""
+        import concurrent.futures
+
+        from agentrun.tool.api.mcp import _get_or_create_event_loop
+
+        def get_loop_in_thread():
+            loop = _get_or_create_event_loop()
+            return loop is not None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(get_loop_in_thread)
+            assert future.result() is True

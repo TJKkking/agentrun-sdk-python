@@ -21,6 +21,25 @@ class ToolType(str, Enum):
     """技能工具 / Skill Tool"""
 
 
+class ToolCreateMethod(str, Enum):
+    """工具创建方式 / Tool Create Method
+
+    描述工具的创建和部署方式，用于数据链路鉴权策略判断。
+    Describes how a tool is created and deployed, used for data-plane auth policy decisions.
+    """
+
+    MCP_REMOTE = "MCP_REMOTE"
+    """远程 MCP 服务器 / Remote MCP server"""
+    MCP_LOCAL = "MCP_LOCAL"
+    """本地 MCP 标准输入输出 / Local MCP stdio"""
+    MCP_BUNDLE = "MCP_BUNDLE"
+    """MCP 打包部署 / MCP bundle deployment"""
+    CODE_PACKAGE = "CODE_PACKAGE"
+    """代码包部署 / Code package deployment"""
+    OPENAPI_IMPORT = "OPENAPI_IMPORT"
+    """OpenAPI 导入 / OpenAPI import"""
+
+
 class McpConfig(BaseModel):
     """MCP 工具配置 / MCP Tool Configuration
 

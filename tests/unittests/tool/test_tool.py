@@ -615,6 +615,11 @@ class TestTool:
 
         mock_config = Mock()
         mock_config.get_headers.return_value = {}
+        # 添加 AK/SK 的 Mock 返回值，避免 RAM 签名
+        mock_config.get_access_key_id.return_value = None
+        mock_config.get_access_key_secret.return_value = None
+        mock_config.get_security_token.return_value = None
+        mock_config.get_region_id.return_value = "cn-hangzhou"
         mock_config_class.with_configs.return_value = mock_config
 
         zip_buffer = io.BytesIO()
@@ -654,6 +659,346 @@ class TestTool:
 
         with pytest.raises(ValueError, match="only available for SKILL"):
             tool.download_skill()
+
+    @patch("agentrun.tool.tool.get_agentrun_signed_headers")
+    @patch("agentrun.tool.tool.httpx.Client")
+    @patch("agentrun.tool.tool.Config")
+    def test_download_skill_with_ram_auth(
+        self, mock_config_class, mock_client_class, mock_signed_headers
+    ):
+        """测试预发环境使用 RAM 签名认证"""
+        import io
+        import os
+        import shutil
+        import tempfile
+        import zipfile
+
+        # 模拟配置了 AK/SK 的情况
+        mock_config = Mock()
+        mock_config.get_access_key_id.return_value = "test-ak"
+        mock_config.get_access_key_secret.return_value = "test-sk"
+        mock_config.get_security_token.return_value = None
+        mock_config.get_region_id.return_value = "cn-hangzhou"
+        mock_config.get_headers.return_value = {}
+        mock_config_class.with_configs.return_value = mock_config
+
+        # 模拟 RAM 签名
+        mock_signed_headers.return_value = {
+            "Agentrun-Authorization": (
+                "AGENTRUN4-HMAC-SHA256 Credential=test-ak"
+            ),
+            "x-acs-date": "20260330T000000Z",
+            "x-acs-content-sha256": "UNSIGNED-PAYLOAD",
+        }
+
+        # 创建测试用的 zip 文件
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w") as zf:
+            zf.writestr("skill.py", "print('skill')")
+        zip_content = zip_buffer.getvalue()
+
+        mock_response = Mock()
+        mock_response.content = zip_content
+        mock_response.raise_for_status = Mock()
+
+        mock_client_instance = Mock()
+        mock_client_instance.get.return_value = mock_response
+        mock_client_instance.__enter__ = Mock(return_value=mock_client_instance)
+        mock_client_instance.__exit__ = Mock(return_value=False)
+        mock_client_class.return_value = mock_client_instance
+
+        # 测试预发环境 URL
+        tool = Tool(
+            tool_name="test-skill",
+            tool_type="SKILL",
+            data_endpoint="https://1760720386195983.funagent-data-pre.cn-hangzhou.aliyuncs.com",
+        )
+
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            result = tool.download_skill(target_dir=tmp_dir)
+
+            # 验证 RAM 签名被调用
+            assert mock_signed_headers.called
+            # 验证使用的是 RAM 端点
+            call_args = mock_signed_headers.call_args
+            assert "-ram.funagent-data-pre" in call_args[1]["url"]
+
+            expected_dir = os.path.join(tmp_dir, "test-skill")
+            assert result == expected_dir
+        finally:
+            shutil.rmtree(tmp_dir)
+
+    @patch("agentrun.tool.tool.get_agentrun_signed_headers")
+    @patch("agentrun.tool.tool.httpx.Client")
+    @patch("agentrun.tool.tool.Config")
+    def test_download_skill_without_ram_auth(
+        self, mock_config_class, mock_client_class, mock_signed_headers
+    ):
+        """测试没有 AK/SK 时不使用 RAM 签名"""
+        import io
+        import os
+        import shutil
+        import tempfile
+        import zipfile
+
+        # 模拟没有配置 AK/SK 的情况
+        mock_config = Mock()
+        mock_config.get_access_key_id.return_value = None
+        mock_config.get_access_key_secret.return_value = None
+        mock_config.get_headers.return_value = {}
+        mock_config_class.with_configs.return_value = mock_config
+
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w") as zf:
+            zf.writestr("skill.py", "print('skill')")
+        zip_content = zip_buffer.getvalue()
+
+        mock_response = Mock()
+        mock_response.content = zip_content
+        mock_response.raise_for_status = Mock()
+
+        mock_client_instance = Mock()
+        mock_client_instance.get.return_value = mock_response
+        mock_client_instance.__enter__ = Mock(return_value=mock_client_instance)
+        mock_client_instance.__exit__ = Mock(return_value=False)
+        mock_client_class.return_value = mock_client_instance
+
+        tool = Tool(
+            tool_name="test-skill",
+            tool_type="SKILL",
+            data_endpoint="https://example.com",
+        )
+
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            result = tool.download_skill(target_dir=tmp_dir)
+
+            # 验证 RAM 签名没有被调用
+            assert not mock_signed_headers.called
+
+            expected_dir = os.path.join(tmp_dir, "test-skill")
+            assert result == expected_dir
+        finally:
+            shutil.rmtree(tmp_dir)
+
+    # ==================== create_method 鉴权策略测试 ====================
+
+    @patch("agentrun.tool.api.mcp.ToolMCPSession")
+    @patch("agentrun.utils.config.Config")
+    def test_call_tool_mcp_remote_without_proxy_skips_ram(
+        self, mock_config_class, mock_mcp_session_class
+    ):
+        """测试 MCP_REMOTE + proxy_enabled=false 时不走 RAM 鉴权"""
+        mock_session = Mock()
+        mock_session.call_tool.return_value = {"result": "ok"}
+        mock_mcp_session_class.return_value = mock_session
+
+        mock_config = Mock()
+        mock_config.get_headers.return_value = {}
+        mock_config_class.with_configs.return_value = mock_config
+
+        tool = Tool(
+            tool_name="my-tool",
+            tool_type="MCP",
+            create_method="MCP_REMOTE",
+            data_endpoint="https://example.agentrun-data.aliyuncs.com",
+            mcp_config=McpConfig(
+                session_affinity="MCP_SSE", proxy_enabled=False
+            ),
+        )
+
+        tool.call_tool("tool1", {})
+
+        # 验证 ToolMCPSession 被调用时 use_ram_auth=False
+        call_kwargs = mock_mcp_session_class.call_args[1]
+        assert call_kwargs["use_ram_auth"] is False
+
+    @patch("agentrun.tool.api.mcp.ToolMCPSession")
+    @patch("agentrun.utils.config.Config")
+    def test_call_tool_mcp_remote_with_proxy_uses_ram(
+        self, mock_config_class, mock_mcp_session_class
+    ):
+        """测试 MCP_REMOTE + proxy_enabled=true 时走 RAM 鉴权"""
+        mock_session = Mock()
+        mock_session.call_tool.return_value = {"result": "ok"}
+        mock_mcp_session_class.return_value = mock_session
+
+        mock_config = Mock()
+        mock_config.get_headers.return_value = {}
+        mock_config_class.with_configs.return_value = mock_config
+
+        tool = Tool(
+            tool_name="my-tool",
+            tool_type="MCP",
+            create_method="MCP_REMOTE",
+            data_endpoint="https://example.agentrun-data.aliyuncs.com",
+            mcp_config=McpConfig(
+                session_affinity="MCP_SSE", proxy_enabled=True
+            ),
+        )
+
+        tool.call_tool("tool1", {})
+
+        # 验证 ToolMCPSession 被调用时 use_ram_auth=True
+        call_kwargs = mock_mcp_session_class.call_args[1]
+        assert call_kwargs["use_ram_auth"] is True
+
+    @patch("agentrun.tool.api.mcp.ToolMCPSession")
+    @patch("agentrun.utils.config.Config")
+    def test_call_tool_mcp_bundle_always_uses_ram(
+        self, mock_config_class, mock_mcp_session_class
+    ):
+        """测试 MCP_BUNDLE 类型始终走 RAM 鉴权"""
+        mock_session = Mock()
+        mock_session.call_tool.return_value = {"result": "ok"}
+        mock_mcp_session_class.return_value = mock_session
+
+        mock_config = Mock()
+        mock_config.get_headers.return_value = {}
+        mock_config_class.with_configs.return_value = mock_config
+
+        tool = Tool(
+            tool_name="my-tool",
+            tool_type="MCP",
+            create_method="MCP_BUNDLE",
+            data_endpoint="https://example.agentrun-data.aliyuncs.com",
+            mcp_config=McpConfig(
+                session_affinity="MCP_SSE", proxy_enabled=False
+            ),
+        )
+
+        tool.call_tool("tool1", {})
+
+        # MCP_BUNDLE 即使 proxy_enabled=False 也要走 RAM
+        call_kwargs = mock_mcp_session_class.call_args[1]
+        assert call_kwargs["use_ram_auth"] is True
+
+    @patch("agentrun.tool.api.openapi.ToolOpenAPIClient")
+    @patch("agentrun.utils.config.Config")
+    def test_call_tool_functioncall_openapi_import_skips_ram(
+        self, mock_config_class, mock_openapi_client_class
+    ):
+        """测试 FUNCTIONCALL + OPENAPI_IMPORT 时不走 RAM 鉴权"""
+        mock_client = Mock()
+        mock_client.call_tool.return_value = {"result": "ok"}
+        mock_openapi_client_class.return_value = mock_client
+
+        mock_config = Mock()
+        mock_config.get_headers.return_value = {}
+        mock_config_class.with_configs.return_value = mock_config
+
+        tool = Tool(
+            tool_name="my-tool",
+            tool_type="FUNCTIONCALL",
+            create_method="OPENAPI_IMPORT",
+            protocol_spec=(
+                '{"openapi": "3.0.0", "servers": [{"url":'
+                ' "https://external.example.com"}]}'
+            ),
+        )
+
+        tool.call_tool("tool1", {})
+
+        # 验证 ToolOpenAPIClient 被调用时 use_ram_auth=False
+        call_kwargs = mock_openapi_client_class.call_args[1]
+        assert call_kwargs["use_ram_auth"] is False
+
+    @patch("agentrun.tool.api.openapi.ToolOpenAPIClient")
+    @patch("agentrun.utils.config.Config")
+    def test_call_tool_functioncall_code_package_uses_ram(
+        self, mock_config_class, mock_openapi_client_class
+    ):
+        """测试 FUNCTIONCALL + CODE_PACKAGE 时走 RAM 鉴权"""
+        mock_client = Mock()
+        mock_client.call_tool.return_value = {"result": "ok"}
+        mock_openapi_client_class.return_value = mock_client
+
+        mock_config = Mock()
+        mock_config.get_headers.return_value = {}
+        mock_config_class.with_configs.return_value = mock_config
+
+        tool = Tool(
+            tool_name="my-tool",
+            tool_type="FUNCTIONCALL",
+            create_method="CODE_PACKAGE",
+            data_endpoint="https://example.agentrun-data.aliyuncs.com",
+        )
+
+        tool.call_tool("tool1", {})
+
+        # 验证 ToolOpenAPIClient 被调用时 use_ram_auth=True
+        call_kwargs = mock_openapi_client_class.call_args[1]
+        assert call_kwargs["use_ram_auth"] is True
+
+    @patch("agentrun.tool.api.mcp.ToolMCPSession")
+    @patch("agentrun.utils.config.Config")
+    async def test_call_tool_async_mcp_remote_without_proxy_skips_ram(
+        self, mock_config_class, mock_mcp_session_class
+    ):
+        """测试异步调用：MCP_REMOTE + proxy_enabled=false 时不走 RAM 鉴权"""
+        mock_session = Mock()
+        mock_session.call_tool_async = AsyncMock(return_value={"result": "ok"})
+        mock_mcp_session_class.return_value = mock_session
+
+        mock_config = Mock()
+        mock_config.get_headers.return_value = {}
+        mock_config_class.with_configs.return_value = mock_config
+
+        tool = Tool(
+            tool_name="my-tool",
+            tool_type="MCP",
+            create_method="MCP_REMOTE",
+            data_endpoint="https://example.agentrun-data.aliyuncs.com",
+            mcp_config=McpConfig(
+                session_affinity="MCP_SSE", proxy_enabled=False
+            ),
+        )
+
+        await tool.call_tool_async("tool1", {})
+
+        call_kwargs = mock_mcp_session_class.call_args[1]
+        assert call_kwargs["use_ram_auth"] is False
+
+    @patch("agentrun.tool.api.openapi.ToolOpenAPIClient")
+    @patch("agentrun.utils.config.Config")
+    async def test_call_tool_async_functioncall_openapi_import_skips_ram(
+        self, mock_config_class, mock_openapi_client_class
+    ):
+        """测试异步调用：FUNCTIONCALL + OPENAPI_IMPORT 时不走 RAM 鉴权"""
+        mock_client = Mock()
+        mock_client.call_tool_async = AsyncMock(return_value={"result": "ok"})
+        mock_openapi_client_class.return_value = mock_client
+
+        mock_config = Mock()
+        mock_config.get_headers.return_value = {}
+        mock_config_class.with_configs.return_value = mock_config
+
+        tool = Tool(
+            tool_name="my-tool",
+            tool_type="FUNCTIONCALL",
+            create_method="OPENAPI_IMPORT",
+            protocol_spec=(
+                '{"openapi": "3.0.0", "servers": [{"url":'
+                ' "https://external.example.com"}]}'
+            ),
+        )
+
+        await tool.call_tool_async("tool1", {})
+
+        call_kwargs = mock_openapi_client_class.call_args[1]
+        assert call_kwargs["use_ram_auth"] is False
+
+    def test_tool_create_method_field(self):
+        """测试 Tool 的 create_method 字段"""
+        tool = Tool(create_method="MCP_REMOTE")
+        assert tool.create_method == "MCP_REMOTE"
+
+        tool2 = Tool(create_method="OPENAPI_IMPORT")
+        assert tool2.create_method == "OPENAPI_IMPORT"
+
+        tool3 = Tool()
+        assert tool3.create_method is None
 
 
 class TestToolClient:
