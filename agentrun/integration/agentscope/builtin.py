@@ -43,7 +43,7 @@ def toolset(
     """将内置工具集封装为 LangChain ``StructuredTool`` 列表。 / AgentScope Built-in Integration Functions"""
 
     ts = _toolset(input=name, config=config)
-    return ts.to_crewai(
+    return ts.to_agentscope(
         prefix=prefix,
         modify_tool_name=modify_tool_name,
         filter_tools_by_name=filter_tools_by_name,
