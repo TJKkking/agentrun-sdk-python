@@ -15,7 +15,7 @@ This template is used to generate All-in-One sandbox data API code,
 combining browser and code interpreter capabilities.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional, overload, Tuple, Union
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from agentrun.sandbox.model import CodeLanguage
@@ -46,63 +46,151 @@ class AioDataAPI(SandboxDataAPI):
     # Browser API Methods
     # ========================================
 
-    def get_cdp_url(self, record: Optional[bool] = False):
+    def _assemble_ws_url(
+        self, base: str, ws_path: str, record: Optional[bool] = False
+    ) -> str:
+        path = ws_path.lstrip("/")
+        raw = "/".join(
+            part.strip("/") for part in [base, self.namespace, path] if part
+        )
+        ws_url = raw.replace("http", "ws")
+        u = urlparse(ws_url)
+        query_dict = parse_qs(u.query)
+        query_dict["tenantId"] = [self.config.get_account_id()]
+        if record:
+            query_dict["recording"] = ["true"]
+        new_query = urlencode(query_dict, doseq=True)
+        return u._replace(query=new_query).geturl()
+
+    def _build_ws_url(
+        self, ws_path: str, record: Optional[bool] = False
+    ) -> str:
+        return self._assemble_ws_url(
+            self.config.get_data_endpoint(), ws_path, record
+        )
+
+    def _build_ws_url_with_headers(
+        self,
+        ws_path: str,
+        record: Optional[bool] = False,
+        config: Optional[Config] = None,
+    ) -> Tuple[str, Dict[str, str]]:
+        cfg = Config.with_configs(self.config, config)
+        url = self._assemble_ws_url(self.get_base_url(cfg), ws_path, record)
+        url, headers, _ = self.auth(
+            url=url, headers=cfg.get_headers(), config=cfg
+        )
+        return url, headers
+
+    @overload
+    def get_cdp_url(
+        self,
+        record: Optional[bool] = False,
+        *,
+        with_headers: Literal[True],
+        config: Optional[Config] = None,
+    ) -> Tuple[str, Dict[str, str]]:
+        ...
+
+    @overload
+    def get_cdp_url(
+        self,
+        record: Optional[bool] = False,
+        *,
+        with_headers: Literal[False] = False,
+        config: Optional[Config] = None,
+    ) -> str:
+        ...
+
+    def get_cdp_url(
+        self,
+        record: Optional[bool] = False,
+        *,
+        with_headers: bool = False,
+        config: Optional[Config] = None,
+    ) -> Union[str, Tuple[str, Dict[str, str]]]:
         """
         Generate the WebSocket URL for Chrome DevTools Protocol (CDP) connection.
+        生成 Chrome DevTools Protocol (CDP) 连接的 WebSocket URL。
 
-        This method constructs a WebSocket URL by:
-        1. Converting the HTTP endpoint to WebSocket protocol (ws://)
-        2. Parsing the existing URL and query parameters
-        3. Adding the session ID to the query parameters
-        4. Reconstructing the complete WebSocket URL
+        Args:
+            record: Whether to enable recording / 是否启用录制
+            with_headers: If True, return (url, headers) tuple with authentication headers.
+                If False (default), return only the URL string for backward compatibility.
+                当为 True 时，返回 (url, headers) 元组，包含鉴权头信息。
+                当为 False（默认）时，仅返回 URL 字符串以保持向后兼容。
+            config: Optional config override / 可选的配置覆盖
 
         Returns:
-            str: The complete WebSocket URL for CDP automation connection,
-                 including the session ID in the query parameters.
+            str or Tuple[str, Dict[str, str]]: CDP WebSocket URL, or (url, headers) tuple
+                when with_headers=True.
 
         Example:
             >>> api = AioDataAPI("sandbox123")
             >>> api.get_cdp_url()
-            'ws://example.com/ws/automation?sessionId=session456'
+            'wss://example.com/sandboxes/sandbox123/ws/automation?tenantId=123'
+            >>> url, headers = api.get_cdp_url(with_headers=True)
         """
-        cdp_url = self.with_path("/ws/automation").replace("http", "ws")
-        u = urlparse(cdp_url)
-        query_dict = parse_qs(u.query)
-        query_dict["tenantId"] = [self.config.get_account_id()]
-        if record:
-            query_dict["recording"] = ["true"]
-        new_query = urlencode(query_dict, doseq=True)
-        new_u = u._replace(query=new_query)
-        return new_u.geturl()
+        if with_headers:
+            return self._build_ws_url_with_headers(
+                "/ws/automation", record=record, config=config
+            )
+        return self._build_ws_url("/ws/automation", record=record)
 
-    def get_vnc_url(self, record: Optional[bool] = False):
+    @overload
+    def get_vnc_url(
+        self,
+        record: Optional[bool] = False,
+        *,
+        with_headers: Literal[True],
+        config: Optional[Config] = None,
+    ) -> Tuple[str, Dict[str, str]]:
+        ...
+
+    @overload
+    def get_vnc_url(
+        self,
+        record: Optional[bool] = False,
+        *,
+        with_headers: Literal[False] = False,
+        config: Optional[Config] = None,
+    ) -> str:
+        ...
+
+    def get_vnc_url(
+        self,
+        record: Optional[bool] = False,
+        *,
+        with_headers: bool = False,
+        config: Optional[Config] = None,
+    ) -> Union[str, Tuple[str, Dict[str, str]]]:
         """
         Generate the WebSocket URL for VNC (Virtual Network Computing) live view connection.
+        生成 VNC 实时预览连接的 WebSocket URL。
 
-        This method constructs a WebSocket URL for real-time browser viewing by:
-        1. Converting the HTTP endpoint to WebSocket protocol (ws://)
-        2. Parsing the existing URL and query parameters
-        3. Adding the session ID to the query parameters
-        4. Reconstructing the complete WebSocket URL
+        Args:
+            record: Whether to enable recording / 是否启用录制
+            with_headers: If True, return (url, headers) tuple with authentication headers.
+                If False (default), return only the URL string for backward compatibility.
+                当为 True 时，返回 (url, headers) 元组，包含鉴权头信息。
+                当为 False（默认）时，仅返回 URL 字符串以保持向后兼容。
+            config: Optional config override / 可选的配置覆盖
 
         Returns:
-            str: The complete WebSocket URL for VNC live view connection,
-                 including the session ID in the query parameters.
+            str or Tuple[str, Dict[str, str]]: VNC WebSocket URL, or (url, headers) tuple
+                when with_headers=True.
 
         Example:
             >>> api = AioDataAPI("sandbox123")
             >>> api.get_vnc_url()
-            'ws://example.com/ws/liveview?sessionId=session456'
+            'wss://example.com/sandboxes/sandbox123/ws/liveview?tenantId=123'
+            >>> url, headers = api.get_vnc_url(with_headers=True)
         """
-        vnc_url = self.with_path("/ws/liveview").replace("http", "ws")
-        u = urlparse(vnc_url)
-        query_dict = parse_qs(u.query)
-        query_dict["tenantId"] = [self.config.get_account_id()]
-        if record:
-            query_dict["recording"] = ["true"]
-        new_query = urlencode(query_dict, doseq=True)
-        new_u = u._replace(query=new_query)
-        return new_u.geturl()
+        if with_headers:
+            return self._build_ws_url_with_headers(
+                "/ws/liveview", record=record, config=config
+            )
+        return self._build_ws_url("/ws/liveview", record=record)
 
     def sync_playwright(
         self,
@@ -112,11 +200,8 @@ class AioDataAPI(SandboxDataAPI):
     ):
         from .playwright_sync import BrowserPlaywrightSync
 
-        cfg = Config.with_configs(self.config, config)
-
-        url = self.get_cdp_url(record=record)
-        url, headers, _ = self.auth(
-            url=url, headers=cfg.get_headers(), config=cfg
+        url, headers = self._build_ws_url_with_headers(
+            "/ws/automation", record=record, config=config
         )
         return BrowserPlaywrightSync(
             url,
@@ -132,11 +217,8 @@ class AioDataAPI(SandboxDataAPI):
     ):
         from .playwright_async import BrowserPlaywrightAsync
 
-        cfg = Config.with_configs(self.config, config)
-
-        url = self.get_cdp_url(record=record)
-        url, headers, _ = self.auth(
-            url=url, headers=cfg.get_headers(), config=cfg
+        url, headers = self._build_ws_url_with_headers(
+            "/ws/automation", record=record, config=config
         )
         return BrowserPlaywrightAsync(
             url,

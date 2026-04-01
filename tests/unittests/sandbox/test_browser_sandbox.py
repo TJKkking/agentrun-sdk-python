@@ -56,7 +56,9 @@ class TestBrowserSandbox:
         sb = _make_sandbox()
         sb.data_api.get_cdp_url.return_value = "ws://example.com/ws/automation"
         assert sb.get_cdp_url(record=True) == "ws://example.com/ws/automation"
-        sb.data_api.get_cdp_url.assert_called_once_with(record=True)
+        sb.data_api.get_cdp_url.assert_called_once_with(
+            record=True, with_headers=False, config=None
+        )
 
     def test_get_vnc_url(self):
         sb = _make_sandbox()
