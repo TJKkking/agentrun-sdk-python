@@ -179,7 +179,7 @@ class BrowserDataAPI(SandboxDataAPI):
             return self._build_ws_url_with_headers(
                 "/ws/liveview", record=record, config=config
             )
-        return self._build_ws_url("/ws/liveview", record=record)
+        return self._build_ws_url("/ws/liveview", record=record, config=config)
 
     def sync_playwright(
         self,
