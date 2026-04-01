@@ -11,7 +11,8 @@ from dataclasses import dataclass, field
 import json
 import os
 import re
-from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union
+import subprocess
+from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING, Union
 
 from agentrun.integration.utils.tool import CommonToolSet, Tool, ToolParameter
 from agentrun.utils.log import logger
@@ -19,6 +20,10 @@ from agentrun.utils.log import logger
 if TYPE_CHECKING:
     from agentrun.tool.tool import Tool as ToolResource
     from agentrun.utils.config import Config
+
+# Maximum output size for execute_command (bytes)
+# execute_command 输出大小限制（字节）
+MAX_OUTPUT_SIZE = 102400  # 100KB
 
 
 @dataclass
@@ -100,11 +105,15 @@ class SkillLoader:
         skills_dir: str = ".skills",
         remote_skill_names: Optional[List[str]] = None,
         config: Optional["Config"] = None,
+        command_approval: Optional[Callable[[str, str], bool]] = None,
+        command_timeout: int = 300,
     ):
         self._skills_dir = skills_dir
         self._remote_skill_names = remote_skill_names or []
         self._config = config
         self._skills_cache: Optional[List[SkillInfo]] = None
+        self._command_approval = command_approval
+        self._command_timeout = command_timeout
 
     def _ensure_skills_available(self) -> None:
         """确保远程 skill 已下载到本地 / Ensure remote skills are downloaded locally
@@ -364,8 +373,237 @@ class SkillLoader:
         }
         return json.dumps(detail_result, ensure_ascii=False)
 
+    def _read_skill_file_func(self, name: str, relative_path: str) -> str:
+        """read_skill_file 工具的执行函数 / Execution function for the read_skill_file tool
+
+        读取指定 skill 目录内的文件内容，带路径穿越保护。
+        Reads file content within a specific skill directory with path traversal protection.
+
+        Args:
+            name: skill 名称 / skill name
+            relative_path: skill 目录内的相对路径 / relative path within skill directory
+
+        Returns:
+            JSON 字符串 / JSON string
+        """
+        skills = self.scan_skills()
+        target_skill: Optional[SkillInfo] = None
+        for skill in skills:
+            if skill.name == name:
+                target_skill = skill
+                break
+
+        if target_skill is None:
+            available = [s.name for s in skills]
+            available_str = ", ".join(available) if available else "none"
+            return json.dumps(
+                {
+                    "error": (
+                        f"Skill '{name}' not found. "
+                        f"Available skills: {available_str}"
+                    )
+                },
+                ensure_ascii=False,
+            )
+
+        # Path traversal protection / 路径穿越保护
+        skill_real_dir = os.path.realpath(target_skill.path)
+        target_path = os.path.realpath(
+            os.path.join(target_skill.path, relative_path)
+        )
+        if (
+            not target_path.startswith(skill_real_dir + os.sep)
+            and target_path != skill_real_dir
+        ):
+            return json.dumps(
+                {
+                    "error": (
+                        f"Path '{relative_path}' is outside the skill"
+                        " directory. Access denied."
+                    )
+                },
+                ensure_ascii=False,
+            )
+
+        if not os.path.exists(target_path):
+            return json.dumps(
+                {
+                    "error": (
+                        f"File '{relative_path}' not found in skill '{name}'."
+                    )
+                },
+                ensure_ascii=False,
+            )
+
+        # Directory listing / 目录列表
+        if os.path.isdir(target_path):
+            try:
+                entries: List[str] = []
+                for entry in sorted(os.listdir(target_path)):
+                    if not entry.startswith("."):
+                        entry_full = os.path.join(target_path, entry)
+                        if os.path.isdir(entry_full):
+                            entries.append(entry + "/")
+                        else:
+                            entries.append(entry)
+                return json.dumps({"files": entries}, ensure_ascii=False)
+            except OSError as error:
+                return json.dumps(
+                    {"error": f"Failed to list directory: {error}"},
+                    ensure_ascii=False,
+                )
+
+        # File reading / 文件读取
+        try:
+            with open(target_path, "r", encoding="utf-8") as file_handle:
+                content = file_handle.read()
+            return json.dumps({"content": content}, ensure_ascii=False)
+        except UnicodeDecodeError:
+            return json.dumps(
+                {
+                    "error": (
+                        f"File '{relative_path}' cannot be read as text. "
+                        "It may be a binary file."
+                    )
+                },
+                ensure_ascii=False,
+            )
+        except OSError as error:
+            return json.dumps(
+                {"error": f"Failed to read file: {error}"},
+                ensure_ascii=False,
+            )
+
+    def _truncate_output(self, output: str) -> str:
+        """截断过大的输出 / Truncate oversized output
+
+        Args:
+            output: 原始输出 / original output
+
+        Returns:
+            截断后的输出 / truncated output
+        """
+        if len(output.encode("utf-8", errors="replace")) <= MAX_OUTPUT_SIZE:
+            return output
+        # Truncate by bytes then decode safely
+        truncated = output.encode("utf-8", errors="replace")[:MAX_OUTPUT_SIZE]
+        return truncated.decode("utf-8", errors="replace") + (
+            f"\n... [output truncated, exceeded {MAX_OUTPUT_SIZE} bytes]"
+        )
+
+    def _execute_command_func(
+        self,
+        command: str,
+        cwd: Optional[str] = None,
+        timeout: Optional[int] = None,
+    ) -> str:
+        """execute_command 工具的执行函数 / Execution function for the execute_command tool
+
+        在本地机器上执行 shell 命令。
+        Executes a shell command on the local machine.
+
+        Args:
+            command: 要执行的命令 / command to execute
+            cwd: 工作目录（可选，默认 skills_dir）/ working directory (optional, defaults to skills_dir)
+            timeout: 超时秒数（可选，默认使用 command_timeout）/ timeout in seconds (optional)
+
+        Returns:
+            JSON 字符串 / JSON string
+        """
+        resolved_cwd = cwd if cwd else self._skills_dir
+        resolved_timeout = (
+            timeout if timeout is not None else self._command_timeout
+        )
+
+        # Validate cwd exists / 验证工作目录存在
+        if not os.path.isdir(resolved_cwd):
+            return json.dumps(
+                {
+                    "error": (
+                        f"Working directory '{resolved_cwd}' does not exist."
+                    )
+                },
+                ensure_ascii=False,
+            )
+
+        # Command approval callback / 命令确认回调
+        if self._command_approval is not None:
+            try:
+                approved = self._command_approval(command, resolved_cwd)
+            except Exception as approval_error:
+                logger.warning(
+                    "Command approval callback raised an error:"
+                    f" {approval_error}"
+                )
+                return json.dumps(
+                    {
+                        "error": (
+                            "Command approval callback failed: "
+                            f"{approval_error}"
+                        )
+                    },
+                    ensure_ascii=False,
+                )
+            if not approved:
+                return json.dumps(
+                    {"error": "Command execution rejected by user."},
+                    ensure_ascii=False,
+                )
+
+        logger.info(
+            f"Executing command: {command!r} in cwd={resolved_cwd!r} "
+            f"timeout={resolved_timeout}s"
+        )
+
+        try:
+            completed = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                cwd=resolved_cwd,
+                timeout=resolved_timeout,
+            )
+            stdout = self._truncate_output(completed.stdout)
+            stderr = self._truncate_output(completed.stderr)
+
+            logger.info(f"Command finished: exit_code={completed.returncode}")
+
+            return json.dumps(
+                {
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "exit_code": completed.returncode,
+                    "timed_out": False,
+                },
+                ensure_ascii=False,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                f"Command timed out after {resolved_timeout}s: {command!r}"
+            )
+            return json.dumps(
+                {
+                    "stdout": "",
+                    "stderr": (
+                        f"Command timed out after {resolved_timeout} seconds."
+                    ),
+                    "exit_code": -1,
+                    "timed_out": True,
+                },
+                ensure_ascii=False,
+            )
+        except OSError as error:
+            logger.error(f"Failed to execute command: {error}")
+            return json.dumps(
+                {"error": f"Failed to execute command: {error}"},
+                ensure_ascii=False,
+            )
+
     def to_common_toolset(self) -> CommonToolSet:
-        """构造包含 load_skills 工具的 CommonToolSet / Construct CommonToolSet with load_skills tool
+        """构造包含 load_skills、read_skill_file、execute_command 工具的 CommonToolSet
+
+        Construct CommonToolSet with load_skills, read_skill_file, and execute_command tools.
 
         Returns:
             CommonToolSet 实例 / CommonToolSet instance
@@ -390,7 +628,82 @@ class SkillLoader:
             func=self._load_skills_func,
         )
 
-        return CommonToolSet(tools_list=[load_skills_tool])
+        read_skill_file_tool = Tool(
+            name="read_skill_file",
+            description=(
+                "Read a file from a skill's directory. "
+                "Returns the file content as text, or lists directory contents "
+                "if the path points to a directory. "
+                "Only files within the skill directory can be accessed."
+            ),
+            parameters=[
+                ToolParameter(
+                    name="name",
+                    param_type="string",
+                    description="The name of the skill containing the file.",
+                    required=True,
+                ),
+                ToolParameter(
+                    name="relative_path",
+                    param_type="string",
+                    description=(
+                        "Relative path to the file within the skill directory "
+                        "(e.g., 'scripts/run.sh', 'requirements.txt')."
+                    ),
+                    required=True,
+                ),
+            ],
+            func=self._read_skill_file_func,
+        )
+
+        execute_command_tool = Tool(
+            name="execute_command",
+            description=(
+                "Execute a shell command on the local machine. "
+                "Use this to run scripts, install dependencies, or perform "
+                "file operations as instructed by skill documentation. "
+                "Returns stdout, stderr, exit_code, and timeout status.\n\n"
+                "⚠️ IMPORTANT: Before calling this tool, you MUST first "
+                "display the exact command to the user and ask for explicit "
+                "confirmation. Only proceed if the user approves. "
+                "Never execute commands without user approval."
+            ),
+            parameters=[
+                ToolParameter(
+                    name="command",
+                    param_type="string",
+                    description="The shell command to execute.",
+                    required=True,
+                ),
+                ToolParameter(
+                    name="cwd",
+                    param_type="string",
+                    description=(
+                        "Working directory for the command. "
+                        "Defaults to the skills directory if not specified."
+                    ),
+                    required=False,
+                ),
+                ToolParameter(
+                    name="timeout",
+                    param_type="integer",
+                    description=(
+                        "Maximum execution time in seconds. "
+                        f"Defaults to {self._command_timeout}."
+                    ),
+                    required=False,
+                ),
+            ],
+            func=self._execute_command_func,
+        )
+
+        return CommonToolSet(
+            tools_list=[
+                load_skills_tool,
+                read_skill_file_tool,
+                execute_command_tool,
+            ]
+        )
 
 
 def skill_tools(
@@ -398,6 +711,8 @@ def skill_tools(
     *,
     skills_dir: str = ".skills",
     config: Optional["Config"] = None,
+    command_approval: Optional[Callable[[str, str], bool]] = None,
+    command_timeout: int = 300,
 ) -> CommonToolSet:
     """将 Skill 封装为通用工具集 / Wrap Skills as CommonToolSet
 
@@ -413,10 +728,16 @@ def skill_tools(
               If not provided, only loads local skills from skills_dir.
         skills_dir: 本地 skill 目录，默认 ".skills" / Local skill directory, default ".skills"
         config: 配置对象 / Configuration object
+        command_approval: 命令执行前的确认回调函数（可选）/
+                          Optional approval callback invoked before executing commands.
+                          接收 (command, cwd) 参数，返回 True 允许执行，False 拒绝 /
+                          Receives (command, cwd), returns True to allow, False to reject.
+        command_timeout: execute_command 的默认超时秒数，默认 30 /
+                         Default timeout in seconds for execute_command, default 30.
 
     Returns:
-        CommonToolSet: 包含 load_skills 工具的通用工具集 /
-                       CommonToolSet containing the load_skills tool
+        CommonToolSet: 包含 load_skills、read_skill_file、execute_command 工具的通用工具集 /
+                       CommonToolSet containing load_skills, read_skill_file, and execute_command tools
 
     Examples:
         >>> # 仅加载本地 skill / Load local skills only
@@ -425,11 +746,14 @@ def skill_tools(
         >>> # 下载远程 skill 后加载 / Download remote skill then load
         >>> ts = skill_tools("my-remote-skill")
         >>>
-        >>> # 下载多个远程 skill / Download multiple remote skills
-        >>> ts = skill_tools(["skill-a", "skill-b"])
+        >>> # 带命令确认回调 / With command approval callback
+        >>> ts = skill_tools(
+        ...     skills_dir=".skills",
+        ...     command_approval=lambda cmd, cwd: input(f"Execute '{cmd}'? [y/N]: ").lower() == "y",
+        ... )
         >>>
-        >>> # 转换为 LangChain 工具 / Convert to LangChain tools
-        >>> lc_tools = ts.to_langchain()
+        >>> # 自定义超时 / Custom timeout
+        >>> ts = skill_tools(skills_dir=".skills", command_timeout=120)
     """
     remote_names: List[str] = []
 
@@ -455,5 +779,7 @@ def skill_tools(
         skills_dir=skills_dir,
         remote_skill_names=remote_names,
         config=config,
+        command_approval=command_approval,
+        command_timeout=command_timeout,
     )
     return loader.to_common_toolset()

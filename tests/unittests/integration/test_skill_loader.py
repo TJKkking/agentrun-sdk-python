@@ -499,8 +499,11 @@ class TestToCommonToolset:
         loader = SkillLoader(skills_dir=skills_dir)
         toolset = loader.to_common_toolset()
         tools_list = toolset.tools()
-        assert len(tools_list) == 1
-        assert tools_list[0].name == "load_skills"
+        assert len(tools_list) == 3
+        tool_names = [t.name for t in tools_list]
+        assert "load_skills" in tool_names
+        assert "read_skill_file" in tool_names
+        assert "execute_command" in tool_names
 
     def test_tool_description_contains_skill_names(self, tmp_path: Any) -> None:
         skills_dir = str(tmp_path / "skills")
@@ -553,8 +556,9 @@ class TestToCommonToolset:
         toolset = loader.to_common_toolset()
         assert isinstance(toolset, CommonToolSet)
         tools_list = toolset.tools()
-        assert len(tools_list) == 1
-        assert "No skills available" in tools_list[0].description
+        assert len(tools_list) == 3
+        load_skills_tool = [t for t in tools_list if t.name == "load_skills"][0]
+        assert "No skills available" in load_skills_tool.description
 
 
 # =============================================================================
@@ -577,7 +581,7 @@ class TestSkillToolsFunction:
         )
         toolset = skill_tools(skills_dir=skills_dir)
         assert isinstance(toolset, CommonToolSet)
-        assert len(toolset.tools()) == 1
+        assert len(toolset.tools()) == 3
 
     def test_with_string_name_triggers_remote_download(
         self, tmp_path: Any
@@ -855,10 +859,10 @@ class TestEndToEnd:
         toolset = skill_tools(skills_dir=skills_dir)
         assert isinstance(toolset, CommonToolSet)
         tools_list = toolset.tools()
-        assert len(tools_list) == 1
+        assert len(tools_list) == 3
 
-        tool = tools_list[0]
-        assert tool.name == "load_skills"
+        tool_map = {t.name: t for t in tools_list}
+        tool = tool_map["load_skills"]
         assert "e2e-skill" in tool.description
 
         # List all skills
@@ -909,3 +913,433 @@ class TestEndToEnd:
         beta = json.loads(tool.func(name="skill-beta"))
         assert beta["name"] == "skill-beta"
         assert beta["instruction"] == ""
+
+
+# =============================================================================
+# 13. read_skill_file 工具测试
+# =============================================================================
+
+
+class TestReadSkillFile:
+    """测试 _read_skill_file_func 方法"""
+
+    def _get_read_skill_file_tool(self, skills_dir: str, **kwargs: Any) -> Any:
+        loader = SkillLoader(skills_dir=skills_dir, **kwargs)
+        toolset = loader.to_common_toolset()
+        tool_map = {t.name: t for t in toolset.tools()}
+        return tool_map["read_skill_file"]
+
+    def test_read_existing_file(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        _create_skill_dir(
+            skills_dir,
+            "my-skill",
+            skill_md_content="---\nname: my-skill\n---\n# Hello",
+            extra_files={"config.json": '{"key": "value"}'},
+        )
+        loader = SkillLoader(skills_dir=skills_dir)
+        result = json.loads(
+            loader._read_skill_file_func("my-skill", "config.json")
+        )
+        assert "content" in result
+        assert '"key": "value"' in result["content"]
+
+    def test_file_not_found(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        _create_skill_dir(
+            skills_dir,
+            "my-skill",
+            skill_md_content="---\nname: my-skill\n---\n",
+        )
+        loader = SkillLoader(skills_dir=skills_dir)
+        result = json.loads(
+            loader._read_skill_file_func("my-skill", "nonexistent.txt")
+        )
+        assert "error" in result
+        assert "not found" in result["error"]
+
+    def test_skill_not_found(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        _create_skill_dir(
+            skills_dir,
+            "existing-skill",
+            skill_md_content="---\nname: existing-skill\n---\n",
+        )
+        loader = SkillLoader(skills_dir=skills_dir)
+        result = json.loads(
+            loader._read_skill_file_func("no-such-skill", "file.txt")
+        )
+        assert "error" in result
+        assert "not found" in result["error"]
+        assert "existing-skill" in result["error"]
+
+    def test_path_traversal_with_dotdot(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        _create_skill_dir(
+            skills_dir,
+            "my-skill",
+            skill_md_content="---\nname: my-skill\n---\n",
+        )
+        # Create a file outside the skill dir
+        with open(tmp_path / "secret.txt", "w") as fh:
+            fh.write("secret data")
+
+        loader = SkillLoader(skills_dir=skills_dir)
+        result = json.loads(
+            loader._read_skill_file_func("my-skill", "../../secret.txt")
+        )
+        assert "error" in result
+        assert (
+            "outside" in result["error"].lower()
+            or "denied" in result["error"].lower()
+        )
+
+    def test_path_traversal_with_absolute_path(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        _create_skill_dir(
+            skills_dir,
+            "my-skill",
+            skill_md_content="---\nname: my-skill\n---\n",
+        )
+        loader = SkillLoader(skills_dir=skills_dir)
+        result = json.loads(
+            loader._read_skill_file_func("my-skill", "/etc/passwd")
+        )
+        assert "error" in result
+        assert (
+            "outside" in result["error"].lower()
+            or "denied" in result["error"].lower()
+        )
+
+    def test_binary_file(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        skill_path = _create_skill_dir(
+            skills_dir,
+            "my-skill",
+            skill_md_content="---\nname: my-skill\n---\n",
+        )
+        # Write a binary file
+        with open(os.path.join(skill_path, "data.bin"), "wb") as fh:
+            fh.write(bytes(range(256)))
+
+        loader = SkillLoader(skills_dir=skills_dir)
+        result = json.loads(
+            loader._read_skill_file_func("my-skill", "data.bin")
+        )
+        assert "error" in result
+        assert "binary" in result["error"].lower()
+
+    def test_directory_listing(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        _create_skill_dir(
+            skills_dir,
+            "my-skill",
+            skill_md_content="---\nname: my-skill\n---\n",
+            extra_files={
+                "scripts/run.sh": "#!/bin/bash\necho hi",
+                "scripts/setup.py": "print('setup')",
+            },
+        )
+        loader = SkillLoader(skills_dir=skills_dir)
+        result = json.loads(loader._read_skill_file_func("my-skill", "scripts"))
+        assert "files" in result
+        assert "run.sh" in result["files"]
+        assert "setup.py" in result["files"]
+
+    def test_read_skill_file_via_tool(self, tmp_path: Any) -> None:
+        """Test read_skill_file via the Tool object's func"""
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        _create_skill_dir(
+            skills_dir,
+            "tool-skill",
+            skill_md_content="---\nname: tool-skill\n---\n",
+            extra_files={"readme.txt": "Hello from tool"},
+        )
+        tool = self._get_read_skill_file_tool(skills_dir)
+        result = json.loads(
+            tool.func(name="tool-skill", relative_path="readme.txt")
+        )
+        assert "content" in result
+        assert "Hello from tool" in result["content"]
+
+
+# =============================================================================
+# 14. execute_command 工具测试
+# =============================================================================
+
+
+class TestExecuteCommand:
+    """测试 _execute_command_func 方法"""
+
+    def test_normal_execution(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        loader = SkillLoader(skills_dir=skills_dir)
+        result = json.loads(loader._execute_command_func("echo hello"))
+        assert result["exit_code"] == 0
+        assert "hello" in result["stdout"]
+        assert result["timed_out"] is False
+
+    def test_nonzero_exit_code(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        loader = SkillLoader(skills_dir=skills_dir)
+        result = json.loads(loader._execute_command_func("exit 42"))
+        assert result["exit_code"] == 42
+        assert result["timed_out"] is False
+
+    def test_stderr_output(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        loader = SkillLoader(skills_dir=skills_dir)
+        result = json.loads(loader._execute_command_func("echo error_msg >&2"))
+        assert "error_msg" in result["stderr"]
+
+    def test_custom_cwd(self, tmp_path: Any) -> None:
+        custom_dir = str(tmp_path / "custom")
+        os.makedirs(custom_dir)
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        loader = SkillLoader(skills_dir=skills_dir)
+        result = json.loads(loader._execute_command_func("pwd", cwd=custom_dir))
+        assert result["exit_code"] == 0
+        assert custom_dir in result["stdout"]
+
+    def test_nonexistent_cwd(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        loader = SkillLoader(skills_dir=skills_dir)
+        result = json.loads(
+            loader._execute_command_func(
+                "echo hi", cwd="/nonexistent/path/12345"
+            )
+        )
+        assert "error" in result
+        assert "does not exist" in result["error"]
+
+    def test_timeout(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        loader = SkillLoader(skills_dir=skills_dir, command_timeout=1)
+        result = json.loads(loader._execute_command_func("sleep 10", timeout=1))
+        assert result["timed_out"] is True
+        assert result["exit_code"] == -1
+
+    def test_output_truncation(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        loader = SkillLoader(skills_dir=skills_dir)
+        # Generate output larger than 100KB
+        large_output_cmd = "python3 -c \"print('A' * 200000)\""
+        result = json.loads(loader._execute_command_func(large_output_cmd))
+        assert result["exit_code"] == 0
+        assert "truncated" in result["stdout"]
+
+    def test_command_approval_approved(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        approval_calls: List[tuple[str, str]] = []
+
+        def approve(command: str, cwd: str) -> bool:
+            approval_calls.append((command, cwd))
+            return True
+
+        loader = SkillLoader(skills_dir=skills_dir, command_approval=approve)
+        result = json.loads(loader._execute_command_func("echo approved"))
+        assert result["exit_code"] == 0
+        assert "approved" in result["stdout"]
+        assert len(approval_calls) == 1
+        assert approval_calls[0][0] == "echo approved"
+
+    def test_command_approval_rejected(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+
+        def reject(command: str, cwd: str) -> bool:
+            return False
+
+        loader = SkillLoader(skills_dir=skills_dir, command_approval=reject)
+        result = json.loads(loader._execute_command_func("echo should_not_run"))
+        assert "error" in result
+        assert "rejected" in result["error"].lower()
+
+    def test_no_command_approval(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        loader = SkillLoader(skills_dir=skills_dir, command_approval=None)
+        result = json.loads(loader._execute_command_func("echo no_approval"))
+        assert result["exit_code"] == 0
+        assert "no_approval" in result["stdout"]
+
+    def test_command_approval_raises_exception(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+
+        def broken_approval(command: str, cwd: str) -> bool:
+            raise RuntimeError("approval callback broken")
+
+        loader = SkillLoader(
+            skills_dir=skills_dir, command_approval=broken_approval
+        )
+        result = json.loads(loader._execute_command_func("echo should_not_run"))
+        assert "error" in result
+        assert (
+            "approval callback" in result["error"].lower()
+            or "broken" in result["error"].lower()
+        )
+
+    def test_default_cwd_is_skills_dir(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        loader = SkillLoader(skills_dir=skills_dir)
+        result = json.loads(loader._execute_command_func("pwd"))
+        assert result["exit_code"] == 0
+        # The resolved real path should match
+        assert os.path.realpath(skills_dir) in os.path.realpath(
+            result["stdout"].strip()
+        )
+
+    def test_execute_command_via_tool(self, tmp_path: Any) -> None:
+        """Test execute_command via the Tool object's func"""
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        loader = SkillLoader(skills_dir=skills_dir)
+        toolset = loader.to_common_toolset()
+        tool_map = {t.name: t for t in toolset.tools()}
+        tool = tool_map["execute_command"]
+        result = json.loads(tool.func(command="echo via_tool"))
+        assert result["exit_code"] == 0
+        assert "via_tool" in result["stdout"]
+
+
+# =============================================================================
+# 15. skill_tools() 新参数测试
+# =============================================================================
+
+
+class TestSkillToolsNewParams:
+    """测试 skill_tools() 的 command_approval 和 command_timeout 参数"""
+
+    def test_command_approval_passed_through(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        approval_called = False
+
+        def approval(command: str, cwd: str) -> bool:
+            nonlocal approval_called
+            approval_called = True
+            return True
+
+        toolset = skill_tools(skills_dir=skills_dir, command_approval=approval)
+        tool_map = {t.name: t for t in toolset.tools()}
+        exec_tool = tool_map["execute_command"]
+        result = json.loads(exec_tool.func(command="echo test"))
+        assert approval_called
+        assert result["exit_code"] == 0
+
+    def test_command_timeout_passed_through(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        toolset = skill_tools(skills_dir=skills_dir, command_timeout=1)
+        tool_map = {t.name: t for t in toolset.tools()}
+        exec_tool = tool_map["execute_command"]
+        result = json.loads(exec_tool.func(command="sleep 10"))
+        assert result["timed_out"] is True
+
+    def test_default_values(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        toolset = skill_tools(skills_dir=skills_dir)
+        tool_map = {t.name: t for t in toolset.tools()}
+        exec_tool = tool_map["execute_command"]
+        # Default timeout is 30, command should succeed quickly
+        result = json.loads(exec_tool.func(command="echo default"))
+        assert result["exit_code"] == 0
+        assert "default" in result["stdout"]
+
+
+# =============================================================================
+# 16. to_common_toolset() 返回 3 个工具测试
+# =============================================================================
+
+
+class TestToCommonToolsetThreeTools:
+    """测试 to_common_toolset() 返回包含 3 个工具的 CommonToolSet"""
+
+    def test_returns_three_tools(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        _create_skill_dir(
+            skills_dir,
+            "test-skill",
+            skill_md_content="---\nname: test-skill\n---\n",
+        )
+        loader = SkillLoader(skills_dir=skills_dir)
+        toolset = loader.to_common_toolset()
+        tools_list = toolset.tools()
+        assert len(tools_list) == 3
+        tool_names = {t.name for t in tools_list}
+        assert tool_names == {
+            "load_skills",
+            "read_skill_file",
+            "execute_command",
+        }
+
+    def test_load_skills_tool_has_correct_params(self, tmp_path: Any) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        loader = SkillLoader(skills_dir=skills_dir)
+        toolset = loader.to_common_toolset()
+        tool_map = {t.name: t for t in toolset.tools()}
+        load_tool = tool_map["load_skills"]
+        assert "name" in load_tool.parameters["properties"]
+
+    def test_read_skill_file_tool_has_correct_params(
+        self, tmp_path: Any
+    ) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        loader = SkillLoader(skills_dir=skills_dir)
+        toolset = loader.to_common_toolset()
+        tool_map = {t.name: t for t in toolset.tools()}
+        read_tool = tool_map["read_skill_file"]
+        assert "name" in read_tool.parameters["properties"]
+        assert "relative_path" in read_tool.parameters["properties"]
+        required = read_tool.parameters.get("required", [])
+        assert "name" in required
+        assert "relative_path" in required
+
+    def test_execute_command_tool_has_correct_params(
+        self, tmp_path: Any
+    ) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        loader = SkillLoader(skills_dir=skills_dir)
+        toolset = loader.to_common_toolset()
+        tool_map = {t.name: t for t in toolset.tools()}
+        exec_tool = tool_map["execute_command"]
+        assert "command" in exec_tool.parameters["properties"]
+        assert "cwd" in exec_tool.parameters["properties"]
+        assert "timeout" in exec_tool.parameters["properties"]
+        required = exec_tool.parameters.get("required", [])
+        assert "command" in required
+
+    def test_execute_command_description_has_safety_warning(
+        self, tmp_path: Any
+    ) -> None:
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        loader = SkillLoader(skills_dir=skills_dir)
+        toolset = loader.to_common_toolset()
+        tool_map = {t.name: t for t in toolset.tools()}
+        exec_tool = tool_map["execute_command"]
+        assert "IMPORTANT" in exec_tool.description
+        assert "approval" in exec_tool.description.lower()
