@@ -135,7 +135,7 @@ class AioDataAPI(SandboxDataAPI):
             return self._build_ws_url_with_headers(
                 "/ws/automation", record=record, config=config
             )
-        return self._build_ws_url("/ws/automation", record=record, config=config)
+        return self._build_ws_url("/ws/automation", record=record)
 
     @overload
     def get_vnc_url(
@@ -190,7 +190,7 @@ class AioDataAPI(SandboxDataAPI):
             return self._build_ws_url_with_headers(
                 "/ws/liveview", record=record, config=config
             )
-        return self._build_ws_url("/ws/liveview", record=record, config=config)
+        return self._build_ws_url("/ws/liveview", record=record)
 
     def sync_playwright(
         self,
