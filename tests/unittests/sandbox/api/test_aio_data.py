@@ -6,6 +6,10 @@ import pytest
 
 from agentrun.sandbox.api.aio_data import AioDataAPI
 from agentrun.sandbox.model import CodeLanguage
+from agentrun.utils.config import Config
+
+_DATA_ENDPOINT = "https://account123.agentrun-data.cn-hangzhou.aliyuncs.com"
+_RAM_ENDPOINT = "https://account123-ram.agentrun-data.cn-hangzhou.aliyuncs.com"
 
 
 @pytest.fixture
@@ -13,17 +17,27 @@ def api():
     with patch.object(AioDataAPI, "__init__", lambda self, **kw: None):
         obj = AioDataAPI.__new__(AioDataAPI)
         obj.sandbox_id = "sb-aio-1"
-        obj.config = MagicMock()
-        obj.config.get_account_id.return_value = "account123"
+        obj.config = Config(
+            account_id="account123",
+            data_endpoint=_DATA_ENDPOINT,
+        )
         obj.access_token = "tok"
         obj.access_token_map = {}
         obj.resource_name = "sb-aio-1"
+        obj.namespace = "sandboxes/sb-aio-1"
         obj.with_path = MagicMock(
-            side_effect=lambda p: f"http://host.com/ns{p}?sig=abc"
+            side_effect=lambda p, **kw: f"http://host.com/ns{p}?sig=abc"
         )
-        obj.auth = MagicMock(
-            return_value=("tok", {"Authorization": "Bearer tok"}, None)
-        )
+        obj.get_base_url = MagicMock(return_value=_RAM_ENDPOINT)
+
+        def _auth_side_effect(url="", headers=None, query=None, **kw):
+            return (
+                url,
+                {"Authorization": "Bearer tok", **(headers or {})},
+                query,
+            )
+
+        obj.auth = MagicMock(side_effect=_auth_side_effect)
         obj.get = MagicMock(return_value={"ok": True})
         obj.get_async = AsyncMock(return_value={"ok": True})
         obj.post = MagicMock(return_value={"ok": True})
@@ -62,27 +76,39 @@ class TestAioCdpUrl:
 
     def test_get_cdp_url_no_record(self, api):
         url = api.get_cdp_url()
-        api.with_path.assert_called_once_with("/ws/automation")
-        assert "ws://" in url
+        assert "wss://" in url
         assert "tenantId=account123" in url
         assert "recording" not in url
+        assert "ws/automation" in url
+        assert "-ram" not in url
 
     def test_get_cdp_url_with_record(self, api):
         url = api.get_cdp_url(record=True)
         assert "recording=true" in url
+
+    def test_get_cdp_url_with_headers(self, api):
+        url, headers = api.get_cdp_url(with_headers=True)
+        assert "Authorization" in headers
+        assert "ws/automation" in url
 
 
 class TestAioVncUrl:
 
     def test_get_vnc_url_no_record(self, api):
         url = api.get_vnc_url()
-        api.with_path.assert_called_once_with("/ws/liveview")
-        assert "ws://" in url
+        assert "wss://" in url
         assert "tenantId=account123" in url
+        assert "ws/liveview" in url
+        assert "-ram" not in url
 
     def test_get_vnc_url_with_record(self, api):
         url = api.get_vnc_url(record=True)
         assert "recording=true" in url
+
+    def test_get_vnc_url_with_headers(self, api):
+        url, headers = api.get_vnc_url(with_headers=True)
+        assert "Authorization" in headers
+        assert "ws/liveview" in url
 
 
 class TestAioPlaywright:

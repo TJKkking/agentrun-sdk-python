@@ -17,10 +17,11 @@ combining browser and code interpreter capabilities.
 
 import asyncio
 import time  # noqa: F401
-from typing import Optional
+from typing import Dict, Literal, Optional, overload, Tuple, Union
 
 from agentrun.sandbox.api.aio_data import AioDataAPI
 from agentrun.sandbox.model import CodeLanguage, TemplateType
+from agentrun.utils.config import Config
 from agentrun.utils.exception import ServerError
 from agentrun.utils.log import logger
 
@@ -817,13 +818,79 @@ class AioSandbox(Sandbox):
     # Browser API Methods
     # ========================================
 
-    def get_cdp_url(self, record: Optional[bool] = False):
-        """Get CDP WebSocket URL for browser automation."""
-        return self.data_api.get_cdp_url(record=record)
+    @overload
+    def get_cdp_url(
+        self,
+        record: Optional[bool] = False,
+        *,
+        with_headers: Literal[True],
+        config: Optional[Config] = None,
+    ) -> Tuple[str, Dict[str, str]]:
+        ...
 
-    def get_vnc_url(self, record: Optional[bool] = False):
-        """Get VNC WebSocket URL for live view."""
-        return self.data_api.get_vnc_url(record=record)
+    @overload
+    def get_cdp_url(
+        self,
+        record: Optional[bool] = False,
+        *,
+        with_headers: Literal[False] = False,
+        config: Optional[Config] = None,
+    ) -> str:
+        ...
+
+    def get_cdp_url(
+        self,
+        record: Optional[bool] = False,
+        *,
+        with_headers: bool = False,
+        config: Optional[Config] = None,
+    ) -> Union[str, Tuple[str, Dict[str, str]]]:
+        """Get CDP WebSocket URL for browser automation.
+
+        Args:
+            record: Whether to enable recording / 是否启用录制
+            with_headers: If True, return (url, headers) tuple with authentication headers.
+                当为 True 时，返回 (url, headers) 元组，包含鉴权头信息。
+            config: Optional config override / 可选的配置覆盖
+        """
+        return self.data_api.get_cdp_url(record=record, with_headers=with_headers, config=config)  # type: ignore[call-overload]
+
+    @overload
+    def get_vnc_url(
+        self,
+        record: Optional[bool] = False,
+        *,
+        with_headers: Literal[True],
+        config: Optional[Config] = None,
+    ) -> Tuple[str, Dict[str, str]]:
+        ...
+
+    @overload
+    def get_vnc_url(
+        self,
+        record: Optional[bool] = False,
+        *,
+        with_headers: Literal[False] = False,
+        config: Optional[Config] = None,
+    ) -> str:
+        ...
+
+    def get_vnc_url(
+        self,
+        record: Optional[bool] = False,
+        *,
+        with_headers: bool = False,
+        config: Optional[Config] = None,
+    ) -> Union[str, Tuple[str, Dict[str, str]]]:
+        """Get VNC WebSocket URL for live view.
+
+        Args:
+            record: Whether to enable recording / 是否启用录制
+            with_headers: If True, return (url, headers) tuple with authentication headers.
+                当为 True 时，返回 (url, headers) 元组，包含鉴权头信息。
+            config: Optional config override / 可选的配置覆盖
+        """
+        return self.data_api.get_vnc_url(record=record, with_headers=with_headers, config=config)  # type: ignore[call-overload]
 
     def sync_playwright(self, record: Optional[bool] = False):
         """Get synchronous Playwright browser instance."""
