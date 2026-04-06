@@ -110,7 +110,7 @@ class TestTool:
             mcp_config=McpConfig(session_affinity="MCP_SSE"),
         )
         endpoint = tool._get_mcp_endpoint()
-        assert endpoint == "https://example.com/tools/my-tool/sse"
+        assert endpoint == ("https://example.com/tools/my-tool/sse", "MCP_SSE")
 
     def test_get_mcp_endpoint_streamable(self):
         """测试获取 MCP Streamable endpoint"""
@@ -120,7 +120,10 @@ class TestTool:
             mcp_config=McpConfig(session_affinity="MCP_STREAMABLE"),
         )
         endpoint = tool._get_mcp_endpoint()
-        assert endpoint == "https://example.com/tools/my-tool/mcp"
+        assert endpoint == (
+            "https://example.com/tools/my-tool/mcp",
+            "MCP_STREAMABLE",
+        )
 
     def test_get_mcp_endpoint_default(self):
         """测试获取 MCP endpoint（默认 SSE）"""
@@ -129,7 +132,7 @@ class TestTool:
             data_endpoint="https://example.com",
         )
         endpoint = tool._get_mcp_endpoint()
-        assert endpoint == "https://example.com/tools/my-tool/sse"
+        assert endpoint == ("https://example.com/tools/my-tool/sse", "MCP_SSE")
 
     def test_get_mcp_endpoint_no_name(self):
         """测试没有 name 时获取 MCP endpoint"""
@@ -152,7 +155,10 @@ class TestTool:
             tool_name="my-tool",
         )
         endpoint = tool._get_mcp_endpoint()
-        assert endpoint == "https://fallback.example.com/tools/my-tool/sse"
+        assert endpoint == (
+            "https://fallback.example.com/tools/my-tool/sse",
+            "MCP_SSE",
+        )
 
     def test_from_inner_object(self):
         """测试从内部对象创建 Tool"""
@@ -831,10 +837,10 @@ class TestTool:
             tool_name="my-tool",
             tool_type="MCP",
             create_method="MCP_REMOTE",
-            data_endpoint="https://example.agentrun-data.aliyuncs.com",
             mcp_config=McpConfig(
                 session_affinity="MCP_SSE", proxy_enabled=False
             ),
+            protocol_spec='{"mcpServers":{"s1":{"transportType":"sse","url":"https://my-mcp-server.com/sse"}}}',
         )
 
         tool.call_tool("tool1", {})
@@ -983,10 +989,10 @@ class TestTool:
             tool_name="my-tool",
             tool_type="MCP",
             create_method="MCP_REMOTE",
-            data_endpoint="https://example.agentrun-data.aliyuncs.com",
             mcp_config=McpConfig(
                 session_affinity="MCP_SSE", proxy_enabled=False
             ),
+            protocol_spec='{"mcpServers":{"s1":{"transportType":"sse","url":"https://my-mcp-server.com/sse"}}}',
         )
 
         await tool.call_tool_async("tool1", {})
@@ -1026,6 +1032,193 @@ class TestTool:
         await tool.call_tool_async("tool1", {})
 
         call_kwargs = mock_openapi_client_class.call_args[1]
+        assert call_kwargs["use_ram_auth"] is False
+
+    # ==================== _parse_protocol_spec_mcp_url 测试 ====================
+
+    def test_parse_protocol_spec_mcp_url_sse(self):
+        """测试从 protocol_spec 解析 SSE 类型的 MCP URL"""
+        tool = Tool(
+            tool_name="my-tool",
+            protocol_spec='{"mcpServers":{"server1":{"transportType":"sse","url":"https://my-server.com/sse"}}}',
+        )
+        url, session_affinity = tool._parse_protocol_spec_mcp_url()
+        assert url == "https://my-server.com/sse"
+        assert session_affinity == "MCP_SSE"
+
+    def test_parse_protocol_spec_mcp_url_streamable_http(self):
+        """测试从 protocol_spec 解析 Streamable HTTP 类型的 MCP URL"""
+        tool = Tool(
+            tool_name="my-tool",
+            protocol_spec='{"mcpServers":{"server1":{"transportType":"streamable-http","url":"https://my-server.com/mcp"}}}',
+        )
+        url, session_affinity = tool._parse_protocol_spec_mcp_url()
+        assert url == "https://my-server.com/mcp"
+        assert session_affinity == "MCP_STREAMABLE"
+
+    def test_parse_protocol_spec_mcp_url_unknown_transport_defaults_sse(self):
+        """测试 transportType 未知时默认使用 SSE"""
+        tool = Tool(
+            tool_name="my-tool",
+            protocol_spec='{"mcpServers":{"server1":{"transportType":"unknown","url":"https://my-server.com/path"}}}',
+        )
+        url, session_affinity = tool._parse_protocol_spec_mcp_url()
+        assert url == "https://my-server.com/path"
+        assert session_affinity == "MCP_SSE"
+
+    def test_parse_protocol_spec_mcp_url_empty_protocol_spec(self):
+        """测试 protocol_spec 为空时抛出 ValueError"""
+        tool = Tool(tool_name="my-tool", protocol_spec=None)
+        with pytest.raises(ValueError, match="protocol_spec is required"):
+            tool._parse_protocol_spec_mcp_url()
+
+    def test_parse_protocol_spec_mcp_url_invalid_json(self):
+        """测试 protocol_spec JSON 格式不合法时抛出 ValueError"""
+        tool = Tool(tool_name="my-tool", protocol_spec="invalid json")
+        with pytest.raises(ValueError, match="Failed to parse protocol_spec"):
+            tool._parse_protocol_spec_mcp_url()
+
+    def test_parse_protocol_spec_mcp_url_missing_mcp_servers(self):
+        """测试 protocol_spec 缺少 mcpServers 字段时抛出 ValueError"""
+        tool = Tool(tool_name="my-tool", protocol_spec='{"other":"data"}')
+        with pytest.raises(ValueError, match="mcpServers"):
+            tool._parse_protocol_spec_mcp_url()
+
+    def test_parse_protocol_spec_mcp_url_empty_mcp_servers(self):
+        """测试 mcpServers 为空时抛出 ValueError"""
+        tool = Tool(tool_name="my-tool", protocol_spec='{"mcpServers":{}}')
+        with pytest.raises(ValueError, match="mcpServers not found or invalid"):
+            tool._parse_protocol_spec_mcp_url()
+
+    def test_parse_protocol_spec_mcp_url_missing_url(self):
+        """测试 server entry 缺少 url 字段时抛出 ValueError"""
+        tool = Tool(
+            tool_name="my-tool",
+            protocol_spec='{"mcpServers":{"s1":{"transportType":"sse"}}}',
+        )
+        with pytest.raises(ValueError, match="url"):
+            tool._parse_protocol_spec_mcp_url()
+
+    # ==================== _get_mcp_endpoint 直连模式测试 ====================
+
+    def test_get_mcp_endpoint_mcp_remote_without_proxy(self):
+        """测试 MCP_REMOTE + proxy_enabled=false 时从 protocol_spec 解析 URL"""
+        tool = Tool(
+            tool_name="my-tool",
+            tool_type="MCP",
+            create_method="MCP_REMOTE",
+            mcp_config=McpConfig(
+                session_affinity="MCP_SSE", proxy_enabled=False
+            ),
+            protocol_spec='{"mcpServers":{"s1":{"transportType":"sse","url":"https://external-mcp.com/sse"}}}',
+        )
+        result = tool._get_mcp_endpoint()
+        assert result == ("https://external-mcp.com/sse", "MCP_SSE")
+
+    def test_get_mcp_endpoint_mcp_remote_without_proxy_streamable(self):
+        """测试 MCP_REMOTE + proxy_enabled=false + streamable-http 时从 protocol_spec 解析"""
+        tool = Tool(
+            tool_name="my-tool",
+            tool_type="MCP",
+            create_method="MCP_REMOTE",
+            mcp_config=McpConfig(
+                session_affinity="MCP_SSE", proxy_enabled=False
+            ),
+            protocol_spec='{"mcpServers":{"s1":{"transportType":"streamable-http","url":"https://external-mcp.com/mcp"}}}',
+        )
+        result = tool._get_mcp_endpoint()
+        assert result == ("https://external-mcp.com/mcp", "MCP_STREAMABLE")
+
+    def test_get_mcp_endpoint_mcp_remote_with_proxy_uses_data_endpoint(self):
+        """测试 MCP_REMOTE + proxy_enabled=true 时使用 data_endpoint 拼接"""
+        tool = Tool(
+            tool_name="my-tool",
+            tool_type="MCP",
+            create_method="MCP_REMOTE",
+            data_endpoint="https://example.com",
+            mcp_config=McpConfig(
+                session_affinity="MCP_SSE", proxy_enabled=True
+            ),
+        )
+        result = tool._get_mcp_endpoint()
+        assert result == ("https://example.com/tools/my-tool/sse", "MCP_SSE")
+
+    def test_get_mcp_endpoint_mcp_bundle_uses_data_endpoint(self):
+        """测试 MCP_BUNDLE 类型使用 data_endpoint 拼接"""
+        tool = Tool(
+            tool_name="my-tool",
+            tool_type="MCP",
+            create_method="MCP_BUNDLE",
+            data_endpoint="https://example.com",
+            mcp_config=McpConfig(session_affinity="MCP_SSE"),
+        )
+        result = tool._get_mcp_endpoint()
+        assert result == ("https://example.com/tools/my-tool/sse", "MCP_SSE")
+
+    # ==================== list_tools / call_tool 直连模式 session_affinity 测试 ====================
+
+    @patch("agentrun.tool.api.mcp.ToolMCPSession")
+    @patch("agentrun.utils.config.Config")
+    def test_list_tools_mcp_remote_direct_connect_session_affinity(
+        self, mock_config_class, mock_mcp_session_class
+    ):
+        """测试 list_tools 在 MCP_REMOTE 直连模式下使用 protocol_spec 中的 session_affinity"""
+        mock_session = Mock()
+        mock_session.list_tools.return_value = [
+            ToolInfo(name="tool1", description="Tool 1"),
+        ]
+        mock_mcp_session_class.return_value = mock_session
+
+        mock_config = Mock()
+        mock_config.get_headers.return_value = {}
+        mock_config_class.with_configs.return_value = mock_config
+
+        tool = Tool(
+            tool_name="my-tool",
+            tool_type="MCP",
+            create_method="MCP_REMOTE",
+            mcp_config=McpConfig(
+                session_affinity="MCP_SSE", proxy_enabled=False
+            ),
+            protocol_spec='{"mcpServers":{"s1":{"transportType":"streamable-http","url":"https://external.com/mcp"}}}',
+        )
+
+        tool.list_tools()
+
+        call_kwargs = mock_mcp_session_class.call_args[1]
+        assert call_kwargs["endpoint"] == "https://external.com/mcp"
+        assert call_kwargs["session_affinity"] == "MCP_STREAMABLE"
+        assert call_kwargs["use_ram_auth"] is False
+
+    @patch("agentrun.tool.api.mcp.ToolMCPSession")
+    @patch("agentrun.utils.config.Config")
+    def test_call_tool_mcp_remote_direct_connect_session_affinity(
+        self, mock_config_class, mock_mcp_session_class
+    ):
+        """测试 call_tool 在 MCP_REMOTE 直连模式下使用 protocol_spec 中的 session_affinity"""
+        mock_session = Mock()
+        mock_session.call_tool.return_value = {"result": "ok"}
+        mock_mcp_session_class.return_value = mock_session
+
+        mock_config = Mock()
+        mock_config.get_headers.return_value = {}
+        mock_config_class.with_configs.return_value = mock_config
+
+        tool = Tool(
+            tool_name="my-tool",
+            tool_type="MCP",
+            create_method="MCP_REMOTE",
+            mcp_config=McpConfig(
+                session_affinity="MCP_SSE", proxy_enabled=False
+            ),
+            protocol_spec='{"mcpServers":{"s1":{"transportType":"streamable-http","url":"https://external.com/mcp"}}}',
+        )
+
+        tool.call_tool("tool1", {})
+
+        call_kwargs = mock_mcp_session_class.call_args[1]
+        assert call_kwargs["endpoint"] == "https://external.com/mcp"
+        assert call_kwargs["session_affinity"] == "MCP_STREAMABLE"
         assert call_kwargs["use_ram_auth"] is False
 
     def test_tool_create_method_field(self):

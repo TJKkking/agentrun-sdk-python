@@ -15,9 +15,10 @@ Provides object-oriented wrapper and complete lifecycle management for tool reso
 """
 
 import io
+import json
 import os
 import shutil
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 import zipfile
 
@@ -221,16 +222,85 @@ class Tool(BaseModel):
                 return None
         return None
 
+    def _parse_protocol_spec_mcp_url(self) -> Tuple[str, str]:
+        """从 protocol_spec 解析 MCP 服务器 URL 和 session_affinity / Parse MCP server URL and session_affinity from protocol_spec
+
+        用于 MCP_REMOTE + proxy_enabled=false 场景，从 protocol_spec JSON 中提取
+        第一个 mcpServers entry 的 url 和 transportType。
+        Used for MCP_REMOTE + proxy_enabled=false scenario, extracts url and
+        transportType from the first mcpServers entry in protocol_spec JSON.
+
+        Returns:
+            Tuple[str, str]: (mcp_url, session_affinity)
+
+        Raises:
+            ValueError: protocol_spec 为空、格式不合法或缺少必要字段时抛出
+        """
+        if not self.protocol_spec:
+            raise ValueError(
+                "protocol_spec is required for MCP_REMOTE tool with proxy"
+                " disabled, but it is empty for tool"
+                f" '{self.tool_name or self.name}'"
+            )
+
+        try:
+            spec = json.loads(self.protocol_spec)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise ValueError(
+                "Failed to parse protocol_spec for tool"
+                f" '{self.tool_name or self.name}': {exc}"
+            ) from exc
+
+        mcp_servers = spec.get("mcpServers")
+        if not mcp_servers or not isinstance(mcp_servers, dict):
+            raise ValueError(
+                "mcpServers not found or invalid in protocol_spec for tool"
+                f" '{self.tool_name or self.name}'"
+            )
+
+        first_server = next(iter(mcp_servers.values()), None)
+        if not first_server or not isinstance(first_server, dict):
+            raise ValueError(
+                "No MCP server entry found in protocol_spec for tool"
+                f" '{self.tool_name or self.name}'"
+            )
+
+        url = first_server.get("url")
+        if not url:
+            raise ValueError(
+                "url not found in MCP server entry of protocol_spec for tool"
+                f" '{self.tool_name or self.name}'"
+            )
+
+        transport_type = first_server.get("transportType", "sse")
+        if transport_type == "streamable-http":
+            session_affinity = "MCP_STREAMABLE"
+        else:
+            session_affinity = "MCP_SSE"
+
+        return url, session_affinity
+
     def _get_mcp_endpoint(
         self, config: Optional[Config] = None
-    ) -> Optional[str]:
-        """获取 MCP 数据链路 URL / Get MCP data endpoint URL
+    ) -> Optional[Tuple[str, str]]:
+        """获取 MCP 数据链路 URL 和 session_affinity / Get MCP data endpoint URL and session_affinity
 
-        根据 session_affinity 决定使用 /mcp 还是 /sse 路径。
-        如果 self.data_endpoint 为空，则从 Config 中获取。
-        Determines /mcp or /sse path based on session_affinity.
-        Falls back to Config if self.data_endpoint is not set.
+        MCP_REMOTE + proxy_enabled=false 时从 protocol_spec 解析 URL 和 session_affinity。
+        其他场景使用 data_endpoint 拼接，session_affinity 从 mcp_config 获取。
+        For MCP_REMOTE with proxy disabled, parses URL and session_affinity from protocol_spec.
+        Otherwise constructs URL from data_endpoint and gets session_affinity from mcp_config.
+
+        Returns:
+            Optional[Tuple[str, str]]: (endpoint_url, session_affinity) 或 None
         """
+        is_mcp_remote_without_proxy = (
+            self.create_method == "MCP_REMOTE"
+            and not pydash.get(self, "mcp_config.proxy_enabled", False)
+        )
+
+        if is_mcp_remote_without_proxy:
+            return self._parse_protocol_spec_mcp_url()
+
         effective_name = self.tool_name or self.name
         data_endpoint = self.data_endpoint
         if not data_endpoint:
@@ -244,8 +314,11 @@ class Tool(BaseModel):
         )
 
         if session_affinity == "MCP_STREAMABLE":
-            return f"{data_endpoint}/tools/{effective_name}/mcp"
-        return f"{data_endpoint}/tools/{effective_name}/sse"
+            return (
+                f"{data_endpoint}/tools/{effective_name}/mcp",
+                session_affinity,
+            )
+        return f"{data_endpoint}/tools/{effective_name}/sse", session_affinity
 
     async def list_tools_async(
         self, config: Optional[Config] = None
@@ -265,16 +338,14 @@ class Tool(BaseModel):
         if tool_type == ToolType.MCP:
             from .api.mcp import ToolMCPSession
 
-            mcp_endpoint = self._get_mcp_endpoint(config)
-            if not mcp_endpoint:
+            endpoint_result = self._get_mcp_endpoint(config)
+            if not endpoint_result:
                 logger.warning(
                     "MCP endpoint not available for tool %s", self.name
                 )
                 return []
 
-            session_affinity = pydash.get(
-                self, "mcp_config.session_affinity", "MCP_SSE"
-            )
+            mcp_endpoint, session_affinity = endpoint_result
 
             # MCP_REMOTE + proxy_enabled=false 时直连外部服务，不走 RAM 鉴权
             # Only skip RAM auth for MCP_REMOTE with proxy disabled (direct external connection)
@@ -327,16 +398,14 @@ class Tool(BaseModel):
         if tool_type == ToolType.MCP:
             from .api.mcp import ToolMCPSession
 
-            mcp_endpoint = self._get_mcp_endpoint(config)
-            if not mcp_endpoint:
+            endpoint_result = self._get_mcp_endpoint(config)
+            if not endpoint_result:
                 logger.warning(
                     "MCP endpoint not available for tool %s", self.name
                 )
                 return []
 
-            session_affinity = pydash.get(
-                self, "mcp_config.session_affinity", "MCP_SSE"
-            )
+            mcp_endpoint, session_affinity = endpoint_result
 
             # MCP_REMOTE + proxy_enabled=false 时直连外部服务，不走 RAM 鉴权
             # Only skip RAM auth for MCP_REMOTE with proxy disabled (direct external connection)
@@ -396,15 +465,13 @@ class Tool(BaseModel):
         if tool_type == ToolType.MCP:
             from .api.mcp import ToolMCPSession
 
-            mcp_endpoint = self._get_mcp_endpoint(config)
-            if not mcp_endpoint:
+            endpoint_result = self._get_mcp_endpoint(config)
+            if not endpoint_result:
                 raise ValueError(
                     f"MCP endpoint not available for tool {self.name}"
                 )
 
-            session_affinity = pydash.get(
-                self, "mcp_config.session_affinity", "MCP_SSE"
-            )
+            mcp_endpoint, session_affinity = endpoint_result
 
             # MCP_REMOTE + proxy_enabled=false 时直连外部服务，不走 RAM 鉴权
             # Only skip RAM auth for MCP_REMOTE with proxy disabled (direct external connection)
@@ -469,15 +536,13 @@ class Tool(BaseModel):
         if tool_type == ToolType.MCP:
             from .api.mcp import ToolMCPSession
 
-            mcp_endpoint = self._get_mcp_endpoint(config)
-            if not mcp_endpoint:
+            endpoint_result = self._get_mcp_endpoint(config)
+            if not endpoint_result:
                 raise ValueError(
                     f"MCP endpoint not available for tool {self.name}"
                 )
 
-            session_affinity = pydash.get(
-                self, "mcp_config.session_affinity", "MCP_SSE"
-            )
+            mcp_endpoint, session_affinity = endpoint_result
 
             # MCP_REMOTE + proxy_enabled=false 时直连外部服务，不走 RAM 鉴权
             # Only skip RAM auth for MCP_REMOTE with proxy disabled (direct external connection)
