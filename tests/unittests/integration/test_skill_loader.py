@@ -1343,3 +1343,102 @@ class TestToCommonToolsetThreeTools:
         exec_tool = tool_map["execute_command"]
         assert "IMPORTANT" in exec_tool.description
         assert "approval" in exec_tool.description.lower()
+
+
+# =============================================================================
+# 17. ALLOW_EXECUTE_COMMAND 环境变量控制测试
+# =============================================================================
+
+
+class TestAllowExecuteCommandEnvVar:
+    """测试 ALLOW_EXECUTE_COMMAND 环境变量对 execute_command 工具加载的控制"""
+
+    def test_default_includes_execute_command(self, tmp_path: Any) -> None:
+        """未设置环境变量时，默认包含 execute_command 工具"""
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ALLOW_EXECUTE_COMMAND", None)
+            loader = SkillLoader(skills_dir=skills_dir)
+            toolset = loader.to_common_toolset()
+            tool_names = [t.name for t in toolset.tools()]
+            assert "execute_command" in tool_names
+            assert len(toolset.tools()) == 3
+
+    def test_env_true_includes_execute_command(self, tmp_path: Any) -> None:
+        """ALLOW_EXECUTE_COMMAND=true 时，包含 execute_command 工具"""
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        with patch.dict(os.environ, {"ALLOW_EXECUTE_COMMAND": "true"}):
+            loader = SkillLoader(skills_dir=skills_dir)
+            toolset = loader.to_common_toolset()
+            tool_names = [t.name for t in toolset.tools()]
+            assert "execute_command" in tool_names
+            assert len(toolset.tools()) == 3
+
+    def test_env_false_excludes_execute_command(self, tmp_path: Any) -> None:
+        """ALLOW_EXECUTE_COMMAND=false 时，不包含 execute_command 工具"""
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        with patch.dict(os.environ, {"ALLOW_EXECUTE_COMMAND": "false"}):
+            loader = SkillLoader(skills_dir=skills_dir)
+            toolset = loader.to_common_toolset()
+            tool_names = [t.name for t in toolset.tools()]
+            assert "execute_command" not in tool_names
+            assert len(toolset.tools()) == 2
+            assert "load_skills" in tool_names
+            assert "read_skill_file" in tool_names
+
+    def test_env_false_case_insensitive(self, tmp_path: Any) -> None:
+        """ALLOW_EXECUTE_COMMAND=False / FALSE 等大小写变体均生效"""
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        for value in ("False", "FALSE", "fAlSe"):
+            with patch.dict(os.environ, {"ALLOW_EXECUTE_COMMAND": value}):
+                loader = SkillLoader(skills_dir=skills_dir)
+                toolset = loader.to_common_toolset()
+                tool_names = [t.name for t in toolset.tools()]
+                assert (
+                    "execute_command" not in tool_names
+                ), f"execute_command should be excluded for value={value!r}"
+
+    def test_env_non_false_includes_execute_command(
+        self, tmp_path: Any
+    ) -> None:
+        """ALLOW_EXECUTE_COMMAND 设置为非 false 的值时，包含 execute_command"""
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        for value in ("True", "TRUE", "1", "yes", "anything"):
+            with patch.dict(os.environ, {"ALLOW_EXECUTE_COMMAND": value}):
+                loader = SkillLoader(skills_dir=skills_dir)
+                toolset = loader.to_common_toolset()
+                tool_names = [t.name for t in toolset.tools()]
+                assert (
+                    "execute_command" in tool_names
+                ), f"execute_command should be included for value={value!r}"
+
+    def test_is_execute_command_allowed_static_method(self) -> None:
+        """直接测试 _is_execute_command_allowed 静态方法"""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ALLOW_EXECUTE_COMMAND", None)
+            assert SkillLoader._is_execute_command_allowed() is True
+
+        with patch.dict(os.environ, {"ALLOW_EXECUTE_COMMAND": "true"}):
+            assert SkillLoader._is_execute_command_allowed() is True
+
+        with patch.dict(os.environ, {"ALLOW_EXECUTE_COMMAND": "false"}):
+            assert SkillLoader._is_execute_command_allowed() is False
+
+        with patch.dict(os.environ, {"ALLOW_EXECUTE_COMMAND": "False"}):
+            assert SkillLoader._is_execute_command_allowed() is False
+
+    def test_skill_tools_func_respects_env_var(self, tmp_path: Any) -> None:
+        """测试顶层 skill_tools() 函数也受环境变量控制"""
+        skills_dir = str(tmp_path / "skills")
+        os.makedirs(skills_dir)
+        with patch.dict(os.environ, {"ALLOW_EXECUTE_COMMAND": "false"}):
+            toolset = skill_tools(skills_dir=skills_dir)
+            tool_names = [t.name for t in toolset.tools()]
+            assert "execute_command" not in tool_names
+            assert "load_skills" in tool_names
+            assert "read_skill_file" in tool_names

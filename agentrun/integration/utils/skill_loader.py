@@ -600,10 +600,32 @@ class SkillLoader:
                 ensure_ascii=False,
             )
 
-    def to_common_toolset(self) -> CommonToolSet:
-        """构造包含 load_skills、read_skill_file、execute_command 工具的 CommonToolSet
+    @staticmethod
+    def _is_execute_command_allowed() -> bool:
+        """检查环境变量是否允许加载 execute_command 工具
 
-        Construct CommonToolSet with load_skills, read_skill_file, and execute_command tools.
+        Check whether the ALLOW_EXECUTE_COMMAND environment variable permits
+        loading the execute_command tool.
+
+        The variable is read from ``os.environ``.  When it is absent or set to
+        any value other than a case-insensitive ``"false"``, the tool is
+        allowed (default **True**).
+
+        Returns:
+            True 表示允许 / True means allowed
+        """
+        value = os.environ.get("ALLOW_EXECUTE_COMMAND", "true")
+        return value.lower() != "false"
+
+    def to_common_toolset(self) -> CommonToolSet:
+        """构造包含 load_skills、read_skill_file 以及可选的 execute_command 工具的 CommonToolSet
+
+        Construct CommonToolSet with load_skills, read_skill_file, and
+        optionally execute_command tools.
+
+        The execute_command tool is included only when the environment variable
+        ``ALLOW_EXECUTE_COMMAND`` is not set to ``"false"`` (case-insensitive).
+        When the variable is absent, it defaults to ``"true"`` (included).
 
         Returns:
             CommonToolSet 实例 / CommonToolSet instance
@@ -656,54 +678,52 @@ class SkillLoader:
             func=self._read_skill_file_func,
         )
 
-        execute_command_tool = Tool(
-            name="execute_command",
-            description=(
-                "Execute a shell command on the local machine. "
-                "Use this to run scripts, install dependencies, or perform "
-                "file operations as instructed by skill documentation. "
-                "Returns stdout, stderr, exit_code, and timeout status.\n\n"
-                "⚠️ IMPORTANT: Before calling this tool, you MUST first "
-                "display the exact command to the user and ask for explicit "
-                "confirmation. Only proceed if the user approves. "
-                "Never execute commands without user approval."
-            ),
-            parameters=[
-                ToolParameter(
-                    name="command",
-                    param_type="string",
-                    description="The shell command to execute.",
-                    required=True,
-                ),
-                ToolParameter(
-                    name="cwd",
-                    param_type="string",
-                    description=(
-                        "Working directory for the command. "
-                        "Defaults to the skills directory if not specified."
-                    ),
-                    required=False,
-                ),
-                ToolParameter(
-                    name="timeout",
-                    param_type="integer",
-                    description=(
-                        "Maximum execution time in seconds. "
-                        f"Defaults to {self._command_timeout}."
-                    ),
-                    required=False,
-                ),
-            ],
-            func=self._execute_command_func,
-        )
+        tools_list: List[Tool] = [load_skills_tool, read_skill_file_tool]
 
-        return CommonToolSet(
-            tools_list=[
-                load_skills_tool,
-                read_skill_file_tool,
-                execute_command_tool,
-            ]
-        )
+        if self._is_execute_command_allowed():
+            execute_command_tool = Tool(
+                name="execute_command",
+                description=(
+                    "Execute a shell command on the local machine. Use this to"
+                    " run scripts, install dependencies, or perform file"
+                    " operations as instructed by skill documentation. Returns"
+                    " stdout, stderr, exit_code, and timeout status.\n\n⚠️"
+                    " IMPORTANT: Before calling this tool, you MUST first"
+                    " display the exact command to the user and ask for"
+                    " explicit confirmation. Only proceed if the user approves."
+                    " Never execute commands without user approval."
+                ),
+                parameters=[
+                    ToolParameter(
+                        name="command",
+                        param_type="string",
+                        description="The shell command to execute.",
+                        required=True,
+                    ),
+                    ToolParameter(
+                        name="cwd",
+                        param_type="string",
+                        description=(
+                            "Working directory for the command. "
+                            "Defaults to the skills directory if not specified."
+                        ),
+                        required=False,
+                    ),
+                    ToolParameter(
+                        name="timeout",
+                        param_type="integer",
+                        description=(
+                            "Maximum execution time in seconds. "
+                            f"Defaults to {self._command_timeout}."
+                        ),
+                        required=False,
+                    ),
+                ],
+                func=self._execute_command_func,
+            )
+            tools_list.append(execute_command_tool)
+
+        return CommonToolSet(tools_list=tools_list)
 
 
 def skill_tools(
