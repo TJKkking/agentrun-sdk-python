@@ -4,7 +4,8 @@
 Tests functionality of Tool resource class and ToolClient.
 """
 
-from unittest.mock import AsyncMock, Mock, patch
+import json
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
@@ -110,7 +111,11 @@ class TestTool:
             mcp_config=McpConfig(session_affinity="MCP_SSE"),
         )
         endpoint = tool._get_mcp_endpoint()
-        assert endpoint == ("https://example.com/tools/my-tool/sse", "MCP_SSE")
+        assert endpoint == (
+            "https://example.com/tools/my-tool/sse",
+            "MCP_SSE",
+            {},
+        )
 
     def test_get_mcp_endpoint_streamable(self):
         """测试获取 MCP Streamable endpoint"""
@@ -123,6 +128,7 @@ class TestTool:
         assert endpoint == (
             "https://example.com/tools/my-tool/mcp",
             "MCP_STREAMABLE",
+            {},
         )
 
     def test_get_mcp_endpoint_default(self):
@@ -132,7 +138,11 @@ class TestTool:
             data_endpoint="https://example.com",
         )
         endpoint = tool._get_mcp_endpoint()
-        assert endpoint == ("https://example.com/tools/my-tool/sse", "MCP_SSE")
+        assert endpoint == (
+            "https://example.com/tools/my-tool/sse",
+            "MCP_SSE",
+            {},
+        )
 
     def test_get_mcp_endpoint_no_name(self):
         """测试没有 name 时获取 MCP endpoint"""
@@ -158,6 +168,7 @@ class TestTool:
         assert endpoint == (
             "https://fallback.example.com/tools/my-tool/sse",
             "MCP_SSE",
+            {},
         )
 
     def test_from_inner_object(self):
@@ -1042,9 +1053,10 @@ class TestTool:
             tool_name="my-tool",
             protocol_spec='{"mcpServers":{"server1":{"transportType":"sse","url":"https://my-server.com/sse"}}}',
         )
-        url, session_affinity = tool._parse_protocol_spec_mcp_url()
+        url, session_affinity, headers = tool._parse_protocol_spec_mcp_url()
         assert url == "https://my-server.com/sse"
         assert session_affinity == "MCP_SSE"
+        assert headers == {}
 
     def test_parse_protocol_spec_mcp_url_streamable_http(self):
         """测试从 protocol_spec 解析 Streamable HTTP 类型的 MCP URL"""
@@ -1052,9 +1064,10 @@ class TestTool:
             tool_name="my-tool",
             protocol_spec='{"mcpServers":{"server1":{"transportType":"streamable-http","url":"https://my-server.com/mcp"}}}',
         )
-        url, session_affinity = tool._parse_protocol_spec_mcp_url()
+        url, session_affinity, headers = tool._parse_protocol_spec_mcp_url()
         assert url == "https://my-server.com/mcp"
         assert session_affinity == "MCP_STREAMABLE"
+        assert headers == {}
 
     def test_parse_protocol_spec_mcp_url_unknown_transport_defaults_sse(self):
         """测试 transportType 未知时默认使用 SSE"""
@@ -1062,9 +1075,10 @@ class TestTool:
             tool_name="my-tool",
             protocol_spec='{"mcpServers":{"server1":{"transportType":"unknown","url":"https://my-server.com/path"}}}',
         )
-        url, session_affinity = tool._parse_protocol_spec_mcp_url()
+        url, session_affinity, headers = tool._parse_protocol_spec_mcp_url()
         assert url == "https://my-server.com/path"
         assert session_affinity == "MCP_SSE"
+        assert headers == {}
 
     def test_parse_protocol_spec_mcp_url_empty_protocol_spec(self):
         """测试 protocol_spec 为空时抛出 ValueError"""
@@ -1113,7 +1127,7 @@ class TestTool:
             protocol_spec='{"mcpServers":{"s1":{"transportType":"sse","url":"https://external-mcp.com/sse"}}}',
         )
         result = tool._get_mcp_endpoint()
-        assert result == ("https://external-mcp.com/sse", "MCP_SSE")
+        assert result == ("https://external-mcp.com/sse", "MCP_SSE", {})
 
     def test_get_mcp_endpoint_mcp_remote_without_proxy_streamable(self):
         """测试 MCP_REMOTE + proxy_enabled=false + streamable-http 时从 protocol_spec 解析"""
@@ -1127,7 +1141,7 @@ class TestTool:
             protocol_spec='{"mcpServers":{"s1":{"transportType":"streamable-http","url":"https://external-mcp.com/mcp"}}}',
         )
         result = tool._get_mcp_endpoint()
-        assert result == ("https://external-mcp.com/mcp", "MCP_STREAMABLE")
+        assert result == ("https://external-mcp.com/mcp", "MCP_STREAMABLE", {})
 
     def test_get_mcp_endpoint_mcp_remote_with_proxy_uses_data_endpoint(self):
         """测试 MCP_REMOTE + proxy_enabled=true 时使用 data_endpoint 拼接"""
@@ -1141,7 +1155,11 @@ class TestTool:
             ),
         )
         result = tool._get_mcp_endpoint()
-        assert result == ("https://example.com/tools/my-tool/sse", "MCP_SSE")
+        assert result == (
+            "https://example.com/tools/my-tool/sse",
+            "MCP_SSE",
+            {},
+        )
 
     def test_get_mcp_endpoint_mcp_bundle_uses_data_endpoint(self):
         """测试 MCP_BUNDLE 类型使用 data_endpoint 拼接"""
@@ -1153,7 +1171,83 @@ class TestTool:
             mcp_config=McpConfig(session_affinity="MCP_SSE"),
         )
         result = tool._get_mcp_endpoint()
-        assert result == ("https://example.com/tools/my-tool/sse", "MCP_SSE")
+        assert result == (
+            "https://example.com/tools/my-tool/sse",
+            "MCP_SSE",
+            {},
+        )
+
+    def test_parse_protocol_spec_mcp_url_with_headers(self):
+        """测试 protocol_spec 中包含 headers 时能正确解析"""
+        spec = json.dumps({
+            "mcpServers": {
+                "server": {
+                    "url": "https://mcp.example.com/mcp",
+                    "transportType": "streamable-http",
+                    "headers": {
+                        "Authorization": "Bearer sk-xxx",
+                        "X-Custom": "value",
+                    },
+                }
+            }
+        })
+        tool = Tool(tool_name="my-tool", protocol_spec=spec)
+        url, affinity, headers = tool._parse_protocol_spec_mcp_url()
+        assert url == "https://mcp.example.com/mcp"
+        assert affinity == "MCP_STREAMABLE"
+        assert headers == {
+            "Authorization": "Bearer sk-xxx",
+            "X-Custom": "value",
+        }
+
+    def test_parse_protocol_spec_mcp_url_without_headers(self):
+        """测试 protocol_spec 中没有 headers 字段时返回空 dict"""
+        spec = json.dumps(
+            {"mcpServers": {"server": {"url": "https://mcp.example.com/sse"}}}
+        )
+        tool = Tool(tool_name="my-tool", protocol_spec=spec)
+        url, affinity, headers = tool._parse_protocol_spec_mcp_url()
+        assert url == "https://mcp.example.com/sse"
+        assert affinity == "MCP_SSE"
+        assert headers == {}
+
+    def test_parse_protocol_spec_mcp_url_headers_non_dict_ignored(self):
+        """测试 headers 不是 dict 时被忽略"""
+        spec = json.dumps({
+            "mcpServers": {
+                "server": {
+                    "url": "https://mcp.example.com/sse",
+                    "headers": "not-a-dict",
+                }
+            }
+        })
+        tool = Tool(tool_name="my-tool", protocol_spec=spec)
+        url, affinity, headers = tool._parse_protocol_spec_mcp_url()
+        assert headers == {}
+
+    def test_get_mcp_endpoint_mcp_remote_without_proxy_with_headers(self):
+        """测试直连模式下 headers 从 protocol_spec 传递"""
+        spec = json.dumps({
+            "mcpServers": {
+                "server": {
+                    "url": "https://mcp.example.com/mcp",
+                    "transportType": "streamable-http",
+                    "headers": {"Authorization": "Bearer sk-xxx"},
+                }
+            }
+        })
+        tool = Tool(
+            tool_name="my-tool",
+            create_method="MCP_REMOTE",
+            mcp_config=McpConfig(proxy_enabled=False),
+            protocol_spec=spec,
+        )
+        result = tool._get_mcp_endpoint()
+        assert result == (
+            "https://mcp.example.com/mcp",
+            "MCP_STREAMABLE",
+            {"Authorization": "Bearer sk-xxx"},
+        )
 
     # ==================== list_tools / call_tool 直连模式 session_affinity 测试 ====================
 
@@ -1219,6 +1313,85 @@ class TestTool:
         call_kwargs = mock_mcp_session_class.call_args[1]
         assert call_kwargs["endpoint"] == "https://external.com/mcp"
         assert call_kwargs["session_affinity"] == "MCP_STREAMABLE"
+        assert call_kwargs["use_ram_auth"] is False
+
+    @patch("agentrun.tool.api.mcp.ToolMCPSession")
+    @patch("agentrun.utils.config.Config")
+    def test_list_tools_mcp_remote_direct_connect_with_spec_headers(
+        self, mock_config_class, mock_mcp_session_class
+    ):
+        """测试 list_tools 直连模式下 spec_headers 被合并到 ToolMCPSession 的 headers中"""
+        mock_config = MagicMock()
+        mock_config.get_headers.return_value = {"X-Existing": "old-value"}
+        mock_config_class.with_configs.return_value = mock_config
+
+        mock_session = MagicMock()
+        mock_session.list_tools_async = AsyncMock(return_value=[])
+        mock_mcp_session_class.return_value = mock_session
+
+        spec = json.dumps({
+            "mcpServers": {
+                "server": {
+                    "url": "https://mcp.example.com/mcp",
+                    "transportType": "streamable-http",
+                    "headers": {
+                        "Authorization": "Bearer sk-xxx",
+                        "X-Existing": "new-value",
+                    },
+                }
+            }
+        })
+        tool = Tool(
+            tool_name="my-tool",
+            tool_type="MCP",
+            create_method="MCP_REMOTE",
+            mcp_config=McpConfig(proxy_enabled=False),
+            protocol_spec=spec,
+        )
+        tool.list_tools()
+
+        call_kwargs = mock_mcp_session_class.call_args[1]
+        # spec_headers should override cfg headers for same key
+        assert call_kwargs["headers"] == {
+            "X-Existing": "new-value",
+            "Authorization": "Bearer sk-xxx",
+        }
+        assert call_kwargs["use_ram_auth"] is False
+
+    @patch("agentrun.tool.api.mcp.ToolMCPSession")
+    @patch("agentrun.utils.config.Config")
+    def test_call_tool_mcp_remote_direct_connect_with_spec_headers(
+        self, mock_config_class, mock_mcp_session_class
+    ):
+        """测试 call_tool 直连模式下 spec_headers 被合并到 ToolMCPSession 的 headers中"""
+        mock_config = MagicMock()
+        mock_config.get_headers.return_value = {"X-Existing": "old-value"}
+        mock_config_class.with_configs.return_value = mock_config
+
+        mock_session = MagicMock()
+        mock_session.call_tool_async = AsyncMock(return_value={"result": "ok"})
+        mock_mcp_session_class.return_value = mock_session
+
+        spec = json.dumps({
+            "mcpServers": {
+                "server": {
+                    "url": "https://mcp.example.com/mcp",
+                    "transportType": "streamable-http",
+                    "headers": {"Authorization": "Bearer sk-xxx"},
+                }
+            }
+        })
+        tool = Tool(
+            tool_name="my-tool",
+            tool_type="MCP",
+            create_method="MCP_REMOTE",
+            mcp_config=McpConfig(proxy_enabled=False),
+            protocol_spec=spec,
+        )
+        tool.call_tool("sub-tool", {"arg": "val"})
+
+        call_kwargs = mock_mcp_session_class.call_args[1]
+        assert call_kwargs["headers"] == {"Authorization": "Bearer sk-xxx"}
         assert call_kwargs["use_ram_auth"] is False
 
     def test_tool_create_method_field(self):

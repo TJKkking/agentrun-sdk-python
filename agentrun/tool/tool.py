@@ -222,16 +222,16 @@ class Tool(BaseModel):
                 return None
         return None
 
-    def _parse_protocol_spec_mcp_url(self) -> Tuple[str, str]:
-        """从 protocol_spec 解析 MCP 服务器 URL 和 session_affinity / Parse MCP server URL and session_affinity from protocol_spec
+    def _parse_protocol_spec_mcp_url(self) -> Tuple[str, str, Dict[str, str]]:
+        """从 protocol_spec 解析 MCP 服务器 URL、session_affinity 和 headers / Parse MCP server URL, session_affinity and headers from protocol_spec
 
         用于 MCP_REMOTE + proxy_enabled=false 场景，从 protocol_spec JSON 中提取
-        第一个 mcpServers entry 的 url 和 transportType。
-        Used for MCP_REMOTE + proxy_enabled=false scenario, extracts url and
-        transportType from the first mcpServers entry in protocol_spec JSON.
+        第一个 mcpServers entry 的 url、transportType 和 headers。
+        Used for MCP_REMOTE + proxy_enabled=false scenario, extracts url,
+        transportType and headers from the first mcpServers entry in protocol_spec JSON.
 
         Returns:
-            Tuple[str, str]: (mcp_url, session_affinity)
+            Tuple[str, str, Dict[str, str]]: (mcp_url, session_affinity, headers)
 
         Raises:
             ValueError: protocol_spec 为空、格式不合法或缺少必要字段时抛出
@@ -278,20 +278,26 @@ class Tool(BaseModel):
         else:
             session_affinity = "MCP_SSE"
 
-        return url, session_affinity
+        # 解析 headers（可选字段）/ Parse headers (optional field)
+        raw_headers = first_server.get("headers")
+        spec_headers: Dict[str, str] = {}
+        if raw_headers and isinstance(raw_headers, dict):
+            spec_headers = {str(k): str(v) for k, v in raw_headers.items()}
+
+        return url, session_affinity, spec_headers
 
     def _get_mcp_endpoint(
         self, config: Optional[Config] = None
-    ) -> Optional[Tuple[str, str]]:
-        """获取 MCP 数据链路 URL 和 session_affinity / Get MCP data endpoint URL and session_affinity
+    ) -> Optional[Tuple[str, str, Dict[str, str]]]:
+        """获取 MCP 数据链路 URL、session_affinity 和 spec headers / Get MCP data endpoint URL, session_affinity and spec headers
 
-        MCP_REMOTE + proxy_enabled=false 时从 protocol_spec 解析 URL 和 session_affinity。
-        其他场景使用 data_endpoint 拼接，session_affinity 从 mcp_config 获取。
-        For MCP_REMOTE with proxy disabled, parses URL and session_affinity from protocol_spec.
-        Otherwise constructs URL from data_endpoint and gets session_affinity from mcp_config.
+        MCP_REMOTE + proxy_enabled=false 时从 protocol_spec 解析 URL、session_affinity 和 headers。
+        其他场景使用 data_endpoint 拼接，session_affinity 从 mcp_config 获取，headers 为空。
+        For MCP_REMOTE with proxy disabled, parses URL, session_affinity and headers from protocol_spec.
+        Otherwise constructs URL from data_endpoint and gets session_affinity from mcp_config, headers empty.
 
         Returns:
-            Optional[Tuple[str, str]]: (endpoint_url, session_affinity) 或 None
+            Optional[Tuple[str, str, Dict[str, str]]]: (endpoint_url, session_affinity, spec_headers) 或 None
         """
         is_mcp_remote_without_proxy = (
             self.create_method == "MCP_REMOTE"
@@ -317,8 +323,13 @@ class Tool(BaseModel):
             return (
                 f"{data_endpoint}/tools/{effective_name}/mcp",
                 session_affinity,
+                {},
             )
-        return f"{data_endpoint}/tools/{effective_name}/sse", session_affinity
+        return (
+            f"{data_endpoint}/tools/{effective_name}/sse",
+            session_affinity,
+            {},
+        )
 
     async def list_tools_async(
         self, config: Optional[Config] = None
@@ -345,7 +356,7 @@ class Tool(BaseModel):
                 )
                 return []
 
-            mcp_endpoint, session_affinity = endpoint_result
+            mcp_endpoint, session_affinity, spec_headers = endpoint_result
 
             # MCP_REMOTE + proxy_enabled=false 时直连外部服务，不走 RAM 鉴权
             # Only skip RAM auth for MCP_REMOTE with proxy disabled (direct external connection)
@@ -354,11 +365,15 @@ class Tool(BaseModel):
                 and not pydash.get(self, "mcp_config.proxy_enabled", False)
             )
 
+            # 合并 headers：protocol_spec 中的 headers 优先级更高
+            # Merge headers: protocol_spec headers take precedence
             cfg = Config.with_configs(config)
+            merged_headers = {**(cfg.get_headers() or {}), **spec_headers}
+
             session = ToolMCPSession(
                 endpoint=mcp_endpoint,
                 session_affinity=session_affinity,
-                headers=cfg.get_headers(),
+                headers=merged_headers,
                 config=cfg,
                 use_ram_auth=not is_mcp_remote_without_proxy,
             )
@@ -405,7 +420,7 @@ class Tool(BaseModel):
                 )
                 return []
 
-            mcp_endpoint, session_affinity = endpoint_result
+            mcp_endpoint, session_affinity, spec_headers = endpoint_result
 
             # MCP_REMOTE + proxy_enabled=false 时直连外部服务，不走 RAM 鉴权
             # Only skip RAM auth for MCP_REMOTE with proxy disabled (direct external connection)
@@ -414,11 +429,15 @@ class Tool(BaseModel):
                 and not pydash.get(self, "mcp_config.proxy_enabled", False)
             )
 
+            # 合并 headers：protocol_spec 中的 headers 优先级更高
+            # Merge headers: protocol_spec headers take precedence
             cfg = Config.with_configs(config)
+            merged_headers = {**(cfg.get_headers() or {}), **spec_headers}
+
             session = ToolMCPSession(
                 endpoint=mcp_endpoint,
                 session_affinity=session_affinity,
-                headers=cfg.get_headers(),
+                headers=merged_headers,
                 config=cfg,
                 use_ram_auth=not is_mcp_remote_without_proxy,
             )
@@ -471,7 +490,7 @@ class Tool(BaseModel):
                     f"MCP endpoint not available for tool {self.name}"
                 )
 
-            mcp_endpoint, session_affinity = endpoint_result
+            mcp_endpoint, session_affinity, spec_headers = endpoint_result
 
             # MCP_REMOTE + proxy_enabled=false 时直连外部服务，不走 RAM 鉴权
             # Only skip RAM auth for MCP_REMOTE with proxy disabled (direct external connection)
@@ -480,11 +499,15 @@ class Tool(BaseModel):
                 and not pydash.get(self, "mcp_config.proxy_enabled", False)
             )
 
+            # 合并 headers：protocol_spec 中的 headers 优先级更高
+            # Merge headers: protocol_spec headers take precedence
             cfg = Config.with_configs(config)
+            merged_headers = {**(cfg.get_headers() or {}), **spec_headers}
+
             session = ToolMCPSession(
                 endpoint=mcp_endpoint,
                 session_affinity=session_affinity,
-                headers=cfg.get_headers(),
+                headers=merged_headers,
                 config=cfg,
                 use_ram_auth=not is_mcp_remote_without_proxy,
             )
@@ -542,7 +565,7 @@ class Tool(BaseModel):
                     f"MCP endpoint not available for tool {self.name}"
                 )
 
-            mcp_endpoint, session_affinity = endpoint_result
+            mcp_endpoint, session_affinity, spec_headers = endpoint_result
 
             # MCP_REMOTE + proxy_enabled=false 时直连外部服务，不走 RAM 鉴权
             # Only skip RAM auth for MCP_REMOTE with proxy disabled (direct external connection)
@@ -551,11 +574,15 @@ class Tool(BaseModel):
                 and not pydash.get(self, "mcp_config.proxy_enabled", False)
             )
 
+            # 合并 headers：protocol_spec 中的 headers 优先级更高
+            # Merge headers: protocol_spec headers take precedence
             cfg = Config.with_configs(config)
+            merged_headers = {**(cfg.get_headers() or {}), **spec_headers}
+
             session = ToolMCPSession(
                 endpoint=mcp_endpoint,
                 session_affinity=session_affinity,
-                headers=cfg.get_headers(),
+                headers=merged_headers,
                 config=cfg,
                 use_ram_auth=not is_mcp_remote_without_proxy,
             )
