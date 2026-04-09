@@ -48,6 +48,9 @@ from agentrun.conversation_service.model import (
     ConversationEvent,
     ConversationSession,
     DEFAULT_APP_STATE_TABLE,
+    DEFAULT_CHECKPOINT_BLOBS_TABLE,
+    DEFAULT_CHECKPOINT_TABLE,
+    DEFAULT_CHECKPOINT_WRITES_TABLE,
     DEFAULT_CONVERSATION_SEARCH_INDEX,
     DEFAULT_CONVERSATION_SECONDARY_INDEX,
     DEFAULT_CONVERSATION_TABLE,
@@ -109,6 +112,15 @@ class OTSBackend:
             f"{table_prefix}{DEFAULT_CONVERSATION_SEARCH_INDEX}"
         )
         self._state_search_index = f"{table_prefix}{DEFAULT_STATE_SEARCH_INDEX}"
+
+        # LangGraph checkpoint 表
+        self._checkpoint_table = f"{table_prefix}{DEFAULT_CHECKPOINT_TABLE}"
+        self._checkpoint_writes_table = (
+            f"{table_prefix}{DEFAULT_CHECKPOINT_WRITES_TABLE}"
+        )
+        self._checkpoint_blobs_table = (
+            f"{table_prefix}{DEFAULT_CHECKPOINT_BLOBS_TABLE}"
+        )
 
     # -----------------------------------------------------------------------
     # 建表（异步）/ Table creation (async)
@@ -229,6 +241,226 @@ class OTSBackend:
         """
         self._create_conversation_search_index()
         self._create_state_search_index()
+
+    async def init_checkpoint_tables_async(self) -> None:
+        """创建 LangGraph checkpoint 相关的 3 张表（异步）。
+
+        包含 checkpoint、checkpoint_writes、checkpoint_blobs 表。
+        表已存在时跳过，可重复调用。
+        """
+        await self._create_checkpoint_table_async()
+        await self._create_checkpoint_writes_table_async()
+        await self._create_checkpoint_blobs_table_async()
+
+    def init_checkpoint_tables(self) -> None:
+        """创建 LangGraph checkpoint 相关的 3 张表（同步）。
+
+        包含 checkpoint、checkpoint_writes、checkpoint_blobs 表。
+        表已存在时跳过，可重复调用。
+        """
+        self._create_checkpoint_table()
+        self._create_checkpoint_writes_table()
+        self._create_checkpoint_blobs_table()
+
+    async def _create_checkpoint_table_async(self) -> None:
+        """创建 checkpoint 表（异步）。
+
+        PK: thread_id (STRING), checkpoint_ns (STRING), checkpoint_id (STRING)
+        """
+        table_meta = TableMeta(
+            self._checkpoint_table,
+            [
+                ("thread_id", "STRING"),
+                ("checkpoint_ns", "STRING"),
+                ("checkpoint_id", "STRING"),
+            ],
+        )
+        table_options = TableOptions()
+        reserved_throughput = ReservedThroughput(CapacityUnit(0, 0))
+
+        try:
+            await self._async_client.create_table(
+                table_meta, table_options, reserved_throughput
+            )
+            logger.info("Created table: %s", self._checkpoint_table)
+        except OTSServiceError as e:
+            if "already exist" in str(e).lower() or (
+                hasattr(e, "code") and e.code == "OTSObjectAlreadyExist"
+            ):
+                logger.warning(
+                    "Table %s already exists, skipping.",
+                    self._checkpoint_table,
+                )
+            else:
+                raise
+
+    def _create_checkpoint_table(self) -> None:
+        """创建 checkpoint 表（同步）。
+
+        PK: thread_id (STRING), checkpoint_ns (STRING), checkpoint_id (STRING)
+        """
+        table_meta = TableMeta(
+            self._checkpoint_table,
+            [
+                ("thread_id", "STRING"),
+                ("checkpoint_ns", "STRING"),
+                ("checkpoint_id", "STRING"),
+            ],
+        )
+        table_options = TableOptions()
+        reserved_throughput = ReservedThroughput(CapacityUnit(0, 0))
+
+        try:
+            self._client.create_table(
+                table_meta, table_options, reserved_throughput
+            )
+            logger.info("Created table: %s", self._checkpoint_table)
+        except OTSServiceError as e:
+            if "already exist" in str(e).lower() or (
+                hasattr(e, "code") and e.code == "OTSObjectAlreadyExist"
+            ):
+                logger.warning(
+                    "Table %s already exists, skipping.",
+                    self._checkpoint_table,
+                )
+            else:
+                raise
+
+    async def _create_checkpoint_writes_table_async(self) -> None:
+        """创建 checkpoint_writes 表（异步）。
+
+        PK: thread_id (STRING), checkpoint_ns (STRING),
+            checkpoint_id (STRING), task_idx (STRING)
+        """
+        table_meta = TableMeta(
+            self._checkpoint_writes_table,
+            [
+                ("thread_id", "STRING"),
+                ("checkpoint_ns", "STRING"),
+                ("checkpoint_id", "STRING"),
+                ("task_idx", "STRING"),
+            ],
+        )
+        table_options = TableOptions()
+        reserved_throughput = ReservedThroughput(CapacityUnit(0, 0))
+
+        try:
+            await self._async_client.create_table(
+                table_meta, table_options, reserved_throughput
+            )
+            logger.info("Created table: %s", self._checkpoint_writes_table)
+        except OTSServiceError as e:
+            if "already exist" in str(e).lower() or (
+                hasattr(e, "code") and e.code == "OTSObjectAlreadyExist"
+            ):
+                logger.warning(
+                    "Table %s already exists, skipping.",
+                    self._checkpoint_writes_table,
+                )
+            else:
+                raise
+
+    def _create_checkpoint_writes_table(self) -> None:
+        """创建 checkpoint_writes 表（同步）。
+
+        PK: thread_id (STRING), checkpoint_ns (STRING),
+            checkpoint_id (STRING), task_idx (STRING)
+        """
+        table_meta = TableMeta(
+            self._checkpoint_writes_table,
+            [
+                ("thread_id", "STRING"),
+                ("checkpoint_ns", "STRING"),
+                ("checkpoint_id", "STRING"),
+                ("task_idx", "STRING"),
+            ],
+        )
+        table_options = TableOptions()
+        reserved_throughput = ReservedThroughput(CapacityUnit(0, 0))
+
+        try:
+            self._client.create_table(
+                table_meta, table_options, reserved_throughput
+            )
+            logger.info("Created table: %s", self._checkpoint_writes_table)
+        except OTSServiceError as e:
+            if "already exist" in str(e).lower() or (
+                hasattr(e, "code") and e.code == "OTSObjectAlreadyExist"
+            ):
+                logger.warning(
+                    "Table %s already exists, skipping.",
+                    self._checkpoint_writes_table,
+                )
+            else:
+                raise
+
+    async def _create_checkpoint_blobs_table_async(self) -> None:
+        """创建 checkpoint_blobs 表（异步）。
+
+        PK: thread_id (STRING), checkpoint_ns (STRING),
+            channel (STRING), version (STRING)
+        """
+        table_meta = TableMeta(
+            self._checkpoint_blobs_table,
+            [
+                ("thread_id", "STRING"),
+                ("checkpoint_ns", "STRING"),
+                ("channel", "STRING"),
+                ("version", "STRING"),
+            ],
+        )
+        table_options = TableOptions()
+        reserved_throughput = ReservedThroughput(CapacityUnit(0, 0))
+
+        try:
+            await self._async_client.create_table(
+                table_meta, table_options, reserved_throughput
+            )
+            logger.info("Created table: %s", self._checkpoint_blobs_table)
+        except OTSServiceError as e:
+            if "already exist" in str(e).lower() or (
+                hasattr(e, "code") and e.code == "OTSObjectAlreadyExist"
+            ):
+                logger.warning(
+                    "Table %s already exists, skipping.",
+                    self._checkpoint_blobs_table,
+                )
+            else:
+                raise
+
+    def _create_checkpoint_blobs_table(self) -> None:
+        """创建 checkpoint_blobs 表（同步）。
+
+        PK: thread_id (STRING), checkpoint_ns (STRING),
+            channel (STRING), version (STRING)
+        """
+        table_meta = TableMeta(
+            self._checkpoint_blobs_table,
+            [
+                ("thread_id", "STRING"),
+                ("checkpoint_ns", "STRING"),
+                ("channel", "STRING"),
+                ("version", "STRING"),
+            ],
+        )
+        table_options = TableOptions()
+        reserved_throughput = ReservedThroughput(CapacityUnit(0, 0))
+
+        try:
+            self._client.create_table(
+                table_meta, table_options, reserved_throughput
+            )
+            logger.info("Created table: %s", self._checkpoint_blobs_table)
+        except OTSServiceError as e:
+            if "already exist" in str(e).lower() or (
+                hasattr(e, "code") and e.code == "OTSObjectAlreadyExist"
+            ):
+                logger.warning(
+                    "Table %s already exists, skipping.",
+                    self._checkpoint_blobs_table,
+                )
+            else:
+                raise
 
     async def _create_conversation_table_async(self) -> None:
         """创建 Conversation 表 + 二级索引（异步）。"""
@@ -581,91 +813,6 @@ class OTSBackend:
             else:
                 raise
 
-    async def _create_state_search_index_async(self) -> None:
-        """创建 State 表的多元索引（异步）。
-
-        支持按 session_id 独立精确匹配查询，不受主键前缀限制。
-        索引已存在时跳过。
-        """
-        from tablestore import FieldType  # type: ignore[import-untyped]
-        from tablestore import IndexSetting  # type: ignore[import-untyped]
-        from tablestore import SortOrder  # type: ignore[import-untyped]
-        from tablestore import FieldSchema
-        from tablestore import (
-            FieldSort as OTSFieldSort,
-        )  # type: ignore[import-untyped]
-        from tablestore import SearchIndexMeta
-        from tablestore import Sort as OTSSort  # type: ignore[import-untyped]
-
-        fields = [
-            FieldSchema(
-                "agent_id",
-                FieldType.KEYWORD,
-                index=True,
-                enable_sort_and_agg=True,
-            ),
-            FieldSchema(
-                "user_id",
-                FieldType.KEYWORD,
-                index=True,
-                enable_sort_and_agg=True,
-            ),
-            FieldSchema(
-                "session_id",
-                FieldType.KEYWORD,
-                index=True,
-                enable_sort_and_agg=True,
-            ),
-            FieldSchema(
-                "created_at",
-                FieldType.LONG,
-                index=True,
-                enable_sort_and_agg=True,
-            ),
-            FieldSchema(
-                "updated_at",
-                FieldType.LONG,
-                index=True,
-                enable_sort_and_agg=True,
-            ),
-        ]
-
-        index_setting = IndexSetting(routing_fields=["agent_id"])
-        index_sort = OTSSort(
-            sorters=[OTSFieldSort("updated_at", sort_order=SortOrder.DESC)]
-        )
-        index_meta = SearchIndexMeta(
-            fields,
-            index_setting=index_setting,
-            index_sort=index_sort,
-        )
-
-        try:
-            await self._async_client.create_search_index(
-                self._state_table,
-                self._state_search_index,
-                index_meta,
-            )
-            logger.info(
-                "Created search index: %s on table: %s",
-                self._state_search_index,
-                self._state_table,
-            )
-        except OTSServiceError as e:
-            if "already exist" in str(e).lower() or (
-                hasattr(e, "code") and e.code == "OTSObjectAlreadyExist"
-            ):
-                logger.warning(
-                    "Search index %s already exists, skipping.",
-                    self._state_search_index,
-                )
-            else:
-                raise
-
-    # -----------------------------------------------------------------------
-    # Session CRUD（异步）/ Session CRUD (async)
-    # -----------------------------------------------------------------------
-
     def _create_conversation_search_index(self) -> None:
         """创建 Conversation 表的多元索引（同步）。
 
@@ -773,6 +920,99 @@ class OTSBackend:
             else:
                 raise
 
+    async def _create_state_search_index_async(self) -> None:
+        """创建 State 表的多元索引（异步）。
+
+        支持按 session_id 独立精确匹配查询，不受主键前缀限制。
+        索引已存在时跳过。
+        """
+        from tablestore import FieldType  # type: ignore[import-untyped]
+        from tablestore import IndexSetting  # type: ignore[import-untyped]
+        from tablestore import SortOrder  # type: ignore[import-untyped]
+        from tablestore import FieldSchema
+        from tablestore import (
+            FieldSort as OTSFieldSort,
+        )  # type: ignore[import-untyped]
+        from tablestore import SearchIndexMeta
+        from tablestore import Sort as OTSSort  # type: ignore[import-untyped]
+
+        fields = [
+            FieldSchema(
+                "agent_id",
+                FieldType.KEYWORD,
+                index=True,
+                enable_sort_and_agg=True,
+            ),
+            FieldSchema(
+                "user_id",
+                FieldType.KEYWORD,
+                index=True,
+                enable_sort_and_agg=True,
+            ),
+            FieldSchema(
+                "session_id",
+                FieldType.KEYWORD,
+                index=True,
+                enable_sort_and_agg=True,
+            ),
+            FieldSchema(
+                "created_at",
+                FieldType.LONG,
+                index=True,
+                enable_sort_and_agg=True,
+            ),
+            FieldSchema(
+                "updated_at",
+                FieldType.LONG,
+                index=True,
+                enable_sort_and_agg=True,
+            ),
+        ]
+
+        index_setting = IndexSetting(routing_fields=["agent_id"])
+        index_sort = OTSSort(
+            sorters=[OTSFieldSort("updated_at", sort_order=SortOrder.DESC)]
+        )
+        index_meta = SearchIndexMeta(
+            fields,
+            index_setting=index_setting,
+            index_sort=index_sort,
+        )
+
+        try:
+            await self._async_client.create_search_index(
+                self._state_table,
+                self._state_search_index,
+                index_meta,
+            )
+            logger.info(
+                "Created search index: %s on table: %s",
+                self._state_search_index,
+                self._state_table,
+            )
+        except OTSServiceError as e:
+            err_str = str(e).lower()
+            if "already exist" in err_str or (
+                hasattr(e, "code") and e.code == "OTSObjectAlreadyExist"
+            ):
+                logger.warning(
+                    "Search index %s already exists, skipping.",
+                    self._state_search_index,
+                )
+            elif "does not exist" in err_str and "table" in err_str:
+                logger.warning(
+                    "Table %s does not exist, skipping search index creation"
+                    " for %s.",
+                    self._state_table,
+                    self._state_search_index,
+                )
+            else:
+                raise
+
+    # -----------------------------------------------------------------------
+    # Session CRUD（异步）/ Session CRUD (async)
+    # -----------------------------------------------------------------------
+
     def _create_state_search_index(self) -> None:
         """创建 State 表的多元索引（同步）。
 
@@ -844,11 +1084,19 @@ class OTSBackend:
                 self._state_table,
             )
         except OTSServiceError as e:
-            if "already exist" in str(e).lower() or (
+            err_str = str(e).lower()
+            if "already exist" in err_str or (
                 hasattr(e, "code") and e.code == "OTSObjectAlreadyExist"
             ):
                 logger.warning(
                     "Search index %s already exists, skipping.",
+                    self._state_search_index,
+                )
+            elif "does not exist" in err_str and "table" in err_str:
+                logger.warning(
+                    "Table %s does not exist, skipping search index creation"
+                    " for %s.",
+                    self._state_table,
                     self._state_search_index,
                 )
             else:
@@ -2294,7 +2542,7 @@ class OTSBackend:
         await self._async_client.delete_row(table_name, row, condition)
 
     # -----------------------------------------------------------------------
-    # 内部辅助方法（I/O 相关，异步）
+    # Checkpoint CRUD（LangGraph）（异步）
     # -----------------------------------------------------------------------
 
     def delete_state_row(
@@ -2311,6 +2559,842 @@ class OTSBackend:
         row = Row(primary_key)
         condition = Condition(RowExistenceExpectation.IGNORE)
         self._client.delete_row(table_name, row, condition)
+
+    # -----------------------------------------------------------------------
+    # Checkpoint CRUD（LangGraph）（同步）
+    # -----------------------------------------------------------------------
+
+    async def put_checkpoint_async(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        checkpoint_id: str,
+        *,
+        checkpoint_type: str,
+        checkpoint_data: str,
+        metadata_json: str,
+        parent_checkpoint_id: str = "",
+    ) -> None:
+        """写入/覆盖 checkpoint 行（异步）。"""
+        primary_key = [
+            ("thread_id", thread_id),
+            ("checkpoint_ns", checkpoint_ns),
+            ("checkpoint_id", checkpoint_id),
+        ]
+        attribute_columns = [
+            ("checkpoint_type", checkpoint_type),
+            ("checkpoint_data", checkpoint_data),
+            ("metadata", metadata_json),
+            ("parent_checkpoint_id", parent_checkpoint_id),
+        ]
+        row = Row(primary_key, attribute_columns)
+        condition = Condition(RowExistenceExpectation.IGNORE)
+        await self._async_client.put_row(self._checkpoint_table, row, condition)
+
+    def put_checkpoint(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        checkpoint_id: str,
+        *,
+        checkpoint_type: str,
+        checkpoint_data: str,
+        metadata_json: str,
+        parent_checkpoint_id: str = "",
+    ) -> None:
+        """写入/覆盖 checkpoint 行（同步）。"""
+        primary_key = [
+            ("thread_id", thread_id),
+            ("checkpoint_ns", checkpoint_ns),
+            ("checkpoint_id", checkpoint_id),
+        ]
+        attribute_columns = [
+            ("checkpoint_type", checkpoint_type),
+            ("checkpoint_data", checkpoint_data),
+            ("metadata", metadata_json),
+            ("parent_checkpoint_id", parent_checkpoint_id),
+        ]
+        row = Row(primary_key, attribute_columns)
+        condition = Condition(RowExistenceExpectation.IGNORE)
+        self._client.put_row(self._checkpoint_table, row, condition)
+
+    async def get_checkpoint_async(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        checkpoint_id: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        """读取单条 checkpoint（异步）。
+
+        若 checkpoint_id 为 None，使用 GetRange 获取最新的（按 checkpoint_id 倒序）。
+
+        Returns:
+            包含 checkpoint 字段的字典，或 None。
+        """
+        if checkpoint_id is not None:
+            primary_key = [
+                ("thread_id", thread_id),
+                ("checkpoint_ns", checkpoint_ns),
+                ("checkpoint_id", checkpoint_id),
+            ]
+            _, row, _ = await self._async_client.get_row(
+                self._checkpoint_table, primary_key, max_version=1
+            )
+            if row is None or row.primary_key is None:
+                return None
+            pk = self._pk_to_dict(row.primary_key)
+            attrs = self._attrs_to_dict(row.attribute_columns)
+            return {**pk, **attrs}
+
+        # checkpoint_id 为 None -> 取最新
+        inclusive_start = [
+            ("thread_id", thread_id),
+            ("checkpoint_ns", checkpoint_ns),
+            ("checkpoint_id", INF_MAX),
+        ]
+        exclusive_end = [
+            ("thread_id", thread_id),
+            ("checkpoint_ns", checkpoint_ns),
+            ("checkpoint_id", INF_MIN),
+        ]
+        _, _, rows, _ = await self._async_client.get_range(
+            self._checkpoint_table,
+            Direction.BACKWARD,
+            inclusive_start,
+            exclusive_end,
+            max_version=1,
+            limit=1,
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        pk = self._pk_to_dict(row.primary_key)
+        attrs = self._attrs_to_dict(row.attribute_columns)
+        return {**pk, **attrs}
+
+    def get_checkpoint(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        checkpoint_id: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        """读取单条 checkpoint（同步）。
+
+        若 checkpoint_id 为 None，使用 GetRange 获取最新的（按 checkpoint_id 倒序）。
+
+        Returns:
+            包含 checkpoint 字段的字典，或 None。
+        """
+        if checkpoint_id is not None:
+            primary_key = [
+                ("thread_id", thread_id),
+                ("checkpoint_ns", checkpoint_ns),
+                ("checkpoint_id", checkpoint_id),
+            ]
+            _, row, _ = self._client.get_row(
+                self._checkpoint_table, primary_key, max_version=1
+            )
+            if row is None or row.primary_key is None:
+                return None
+            pk = self._pk_to_dict(row.primary_key)
+            attrs = self._attrs_to_dict(row.attribute_columns)
+            return {**pk, **attrs}
+
+        # checkpoint_id 为 None -> 取最新
+        inclusive_start = [
+            ("thread_id", thread_id),
+            ("checkpoint_ns", checkpoint_ns),
+            ("checkpoint_id", INF_MAX),
+        ]
+        exclusive_end = [
+            ("thread_id", thread_id),
+            ("checkpoint_ns", checkpoint_ns),
+            ("checkpoint_id", INF_MIN),
+        ]
+        _, _, rows, _ = self._client.get_range(
+            self._checkpoint_table,
+            Direction.BACKWARD,
+            inclusive_start,
+            exclusive_end,
+            max_version=1,
+            limit=1,
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        pk = self._pk_to_dict(row.primary_key)
+        attrs = self._attrs_to_dict(row.attribute_columns)
+        return {**pk, **attrs}
+
+    async def list_checkpoints_async(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        *,
+        limit: int = 10,
+        before: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """按 checkpoint_id 倒序列出 checkpoint（异步）。
+
+        Args:
+            thread_id: 线程 ID。
+            checkpoint_ns: checkpoint 命名空间。
+            limit: 最多返回条数。
+            before: 仅返回 checkpoint_id < before 的记录。
+        """
+        if before is not None:
+            start_id: Any = before
+        else:
+            start_id = INF_MAX
+
+        inclusive_start = [
+            ("thread_id", thread_id),
+            ("checkpoint_ns", checkpoint_ns),
+            ("checkpoint_id", start_id),
+        ]
+        exclusive_end = [
+            ("thread_id", thread_id),
+            ("checkpoint_ns", checkpoint_ns),
+            ("checkpoint_id", INF_MIN),
+        ]
+
+        results: list[dict[str, Any]] = []
+        next_start = inclusive_start
+
+        while len(results) < limit:
+            _, next_token, rows, _ = await self._async_client.get_range(
+                self._checkpoint_table,
+                Direction.BACKWARD,
+                next_start,
+                exclusive_end,
+                max_version=1,
+                limit=limit - len(results),
+            )
+
+            for row in rows:
+                pk = self._pk_to_dict(row.primary_key)
+                # 如果 before 指定了精确值，跳过它本身
+                if before is not None and pk.get("checkpoint_id") == before:
+                    continue
+                attrs = self._attrs_to_dict(row.attribute_columns)
+                results.append({**pk, **attrs})
+                if len(results) >= limit:
+                    break
+
+            if next_token is None:
+                break
+            next_start = next_token
+
+        return results
+
+    def list_checkpoints(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        *,
+        limit: int = 10,
+        before: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """按 checkpoint_id 倒序列出 checkpoint（同步）。
+
+        Args:
+            thread_id: 线程 ID。
+            checkpoint_ns: checkpoint 命名空间。
+            limit: 最多返回条数。
+            before: 仅返回 checkpoint_id < before 的记录。
+        """
+        if before is not None:
+            start_id: Any = before
+        else:
+            start_id = INF_MAX
+
+        inclusive_start = [
+            ("thread_id", thread_id),
+            ("checkpoint_ns", checkpoint_ns),
+            ("checkpoint_id", start_id),
+        ]
+        exclusive_end = [
+            ("thread_id", thread_id),
+            ("checkpoint_ns", checkpoint_ns),
+            ("checkpoint_id", INF_MIN),
+        ]
+
+        results: list[dict[str, Any]] = []
+        next_start = inclusive_start
+
+        while len(results) < limit:
+            _, next_token, rows, _ = self._client.get_range(
+                self._checkpoint_table,
+                Direction.BACKWARD,
+                next_start,
+                exclusive_end,
+                max_version=1,
+                limit=limit - len(results),
+            )
+
+            for row in rows:
+                pk = self._pk_to_dict(row.primary_key)
+                # 如果 before 指定了精确值，跳过它本身
+                if before is not None and pk.get("checkpoint_id") == before:
+                    continue
+                attrs = self._attrs_to_dict(row.attribute_columns)
+                results.append({**pk, **attrs})
+                if len(results) >= limit:
+                    break
+
+            if next_token is None:
+                break
+            next_start = next_token
+
+        return results
+
+    async def put_checkpoint_writes_async(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        checkpoint_id: str,
+        writes: list[dict[str, Any]],
+    ) -> None:
+        """批量写入 checkpoint writes（异步）。
+
+        Args:
+            writes: 每个元素是 dict，包含 task_idx, task_id, task_path,
+                    channel, value_type, value_data 字段。
+        """
+        if not writes:
+            return
+
+        for i in range(0, len(writes), _BATCH_WRITE_LIMIT):
+            batch = writes[i : i + _BATCH_WRITE_LIMIT]
+            from tablestore import PutRowItem  # type: ignore[import-untyped]
+
+            put_items = []
+            for w in batch:
+                pk = [
+                    ("thread_id", thread_id),
+                    ("checkpoint_ns", checkpoint_ns),
+                    ("checkpoint_id", checkpoint_id),
+                    ("task_idx", w["task_idx"]),
+                ]
+                attrs = [
+                    ("task_id", w["task_id"]),
+                    ("task_path", w.get("task_path", "")),
+                    ("channel", w["channel"]),
+                    ("value_type", w["value_type"]),
+                    ("value_data", w["value_data"]),
+                ]
+                row = Row(pk, attrs)
+                condition = Condition(RowExistenceExpectation.IGNORE)
+                put_items.append(PutRowItem(row, condition))
+
+            request = BatchWriteRowRequest()
+            request.add(
+                TableInBatchWriteRowItem(
+                    self._checkpoint_writes_table, put_items
+                )
+            )
+            await self._async_client.batch_write_row(request)
+
+    def put_checkpoint_writes(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        checkpoint_id: str,
+        writes: list[dict[str, Any]],
+    ) -> None:
+        """批量写入 checkpoint writes（同步）。
+
+        Args:
+            writes: 每个元素是 dict，包含 task_idx, task_id, task_path,
+                    channel, value_type, value_data 字段。
+        """
+        if not writes:
+            return
+
+        for i in range(0, len(writes), _BATCH_WRITE_LIMIT):
+            batch = writes[i : i + _BATCH_WRITE_LIMIT]
+            from tablestore import PutRowItem  # type: ignore[import-untyped]
+
+            put_items = []
+            for w in batch:
+                pk = [
+                    ("thread_id", thread_id),
+                    ("checkpoint_ns", checkpoint_ns),
+                    ("checkpoint_id", checkpoint_id),
+                    ("task_idx", w["task_idx"]),
+                ]
+                attrs = [
+                    ("task_id", w["task_id"]),
+                    ("task_path", w.get("task_path", "")),
+                    ("channel", w["channel"]),
+                    ("value_type", w["value_type"]),
+                    ("value_data", w["value_data"]),
+                ]
+                row = Row(pk, attrs)
+                condition = Condition(RowExistenceExpectation.IGNORE)
+                put_items.append(PutRowItem(row, condition))
+
+            request = BatchWriteRowRequest()
+            request.add(
+                TableInBatchWriteRowItem(
+                    self._checkpoint_writes_table, put_items
+                )
+            )
+            self._client.batch_write_row(request)
+
+    async def get_checkpoint_writes_async(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        checkpoint_id: str,
+    ) -> list[dict[str, Any]]:
+        """读取指定 checkpoint 的所有 writes（异步）。"""
+        inclusive_start = [
+            ("thread_id", thread_id),
+            ("checkpoint_ns", checkpoint_ns),
+            ("checkpoint_id", checkpoint_id),
+            ("task_idx", INF_MIN),
+        ]
+        exclusive_end = [
+            ("thread_id", thread_id),
+            ("checkpoint_ns", checkpoint_ns),
+            ("checkpoint_id", checkpoint_id),
+            ("task_idx", INF_MAX),
+        ]
+
+        results: list[dict[str, Any]] = []
+        next_start = inclusive_start
+
+        while True:
+            _, next_token, rows, _ = await self._async_client.get_range(
+                self._checkpoint_writes_table,
+                Direction.FORWARD,
+                next_start,
+                exclusive_end,
+                max_version=1,
+            )
+            for row in rows:
+                pk = self._pk_to_dict(row.primary_key)
+                attrs = self._attrs_to_dict(row.attribute_columns)
+                results.append({**pk, **attrs})
+
+            if next_token is None:
+                break
+            next_start = next_token
+
+        return results
+
+    def get_checkpoint_writes(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        checkpoint_id: str,
+    ) -> list[dict[str, Any]]:
+        """读取指定 checkpoint 的所有 writes（同步）。"""
+        inclusive_start = [
+            ("thread_id", thread_id),
+            ("checkpoint_ns", checkpoint_ns),
+            ("checkpoint_id", checkpoint_id),
+            ("task_idx", INF_MIN),
+        ]
+        exclusive_end = [
+            ("thread_id", thread_id),
+            ("checkpoint_ns", checkpoint_ns),
+            ("checkpoint_id", checkpoint_id),
+            ("task_idx", INF_MAX),
+        ]
+
+        results: list[dict[str, Any]] = []
+        next_start = inclusive_start
+
+        while True:
+            _, next_token, rows, _ = self._client.get_range(
+                self._checkpoint_writes_table,
+                Direction.FORWARD,
+                next_start,
+                exclusive_end,
+                max_version=1,
+            )
+            for row in rows:
+                pk = self._pk_to_dict(row.primary_key)
+                attrs = self._attrs_to_dict(row.attribute_columns)
+                results.append({**pk, **attrs})
+
+            if next_token is None:
+                break
+            next_start = next_token
+
+        return results
+
+    async def put_checkpoint_blob_async(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        channel: str,
+        version: str,
+        *,
+        blob_type: str,
+        blob_data: str,
+    ) -> None:
+        """写入/覆盖 checkpoint blob 行（异步）。"""
+        primary_key = [
+            ("thread_id", thread_id),
+            ("checkpoint_ns", checkpoint_ns),
+            ("channel", channel),
+            ("version", version),
+        ]
+        attribute_columns = [
+            ("blob_type", blob_type),
+            ("blob_data", blob_data),
+        ]
+        row = Row(primary_key, attribute_columns)
+        condition = Condition(RowExistenceExpectation.IGNORE)
+        await self._async_client.put_row(
+            self._checkpoint_blobs_table, row, condition
+        )
+
+    def put_checkpoint_blob(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        channel: str,
+        version: str,
+        *,
+        blob_type: str,
+        blob_data: str,
+    ) -> None:
+        """写入/覆盖 checkpoint blob 行（同步）。"""
+        primary_key = [
+            ("thread_id", thread_id),
+            ("checkpoint_ns", checkpoint_ns),
+            ("channel", channel),
+            ("version", version),
+        ]
+        attribute_columns = [
+            ("blob_type", blob_type),
+            ("blob_data", blob_data),
+        ]
+        row = Row(primary_key, attribute_columns)
+        condition = Condition(RowExistenceExpectation.IGNORE)
+        self._client.put_row(self._checkpoint_blobs_table, row, condition)
+
+    async def get_checkpoint_blobs_async(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        channel_versions: dict[str, str],
+    ) -> dict[str, dict[str, str]]:
+        """批量读取 checkpoint blobs（异步）。
+
+        Args:
+            channel_versions: {channel: version} 映射。
+
+        Returns:
+            {channel: {"blob_type": ..., "blob_data": ...}} 映射。
+        """
+        if not channel_versions:
+            return {}
+
+        from tablestore import (  # type: ignore[import-untyped]
+            BatchGetRowRequest,
+            TableInBatchGetRowItem,
+        )
+
+        results: dict[str, dict[str, str]] = {}
+        items = list(channel_versions.items())
+
+        # OTS BatchGetRow 每次最多 100 行
+        batch_limit = 100
+        for i in range(0, len(items), batch_limit):
+            batch = items[i : i + batch_limit]
+            rows_to_get = []
+            for ch, ver in batch:
+                pk = [
+                    ("thread_id", thread_id),
+                    ("checkpoint_ns", checkpoint_ns),
+                    ("channel", ch),
+                    ("version", str(ver)),
+                ]
+                rows_to_get.append(pk)
+
+            table_item = TableInBatchGetRowItem(
+                self._checkpoint_blobs_table,
+                rows_to_get,
+                max_version=1,
+            )
+            request = BatchGetRowRequest()
+            request.add(table_item)
+            response = await self._async_client.batch_get_row(request)
+
+            table_results = response.get_result_by_table(
+                self._checkpoint_blobs_table
+            )
+            for item in table_results:
+                if not item.is_ok or item.row is None:
+                    continue
+                pk = self._pk_to_dict(item.row.primary_key)
+                attrs = self._attrs_to_dict(item.row.attribute_columns)
+                channel_name = pk.get("channel", "")
+                results[channel_name] = {
+                    "blob_type": attrs.get("blob_type", ""),
+                    "blob_data": attrs.get("blob_data", ""),
+                }
+
+        return results
+
+    def get_checkpoint_blobs(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        channel_versions: dict[str, str],
+    ) -> dict[str, dict[str, str]]:
+        """批量读取 checkpoint blobs（同步）。
+
+        Args:
+            channel_versions: {channel: version} 映射。
+
+        Returns:
+            {channel: {"blob_type": ..., "blob_data": ...}} 映射。
+        """
+        if not channel_versions:
+            return {}
+
+        from tablestore import (  # type: ignore[import-untyped]
+            BatchGetRowRequest,
+            TableInBatchGetRowItem,
+        )
+
+        results: dict[str, dict[str, str]] = {}
+        items = list(channel_versions.items())
+
+        # OTS BatchGetRow 每次最多 100 行
+        batch_limit = 100
+        for i in range(0, len(items), batch_limit):
+            batch = items[i : i + batch_limit]
+            rows_to_get = []
+            for ch, ver in batch:
+                pk = [
+                    ("thread_id", thread_id),
+                    ("checkpoint_ns", checkpoint_ns),
+                    ("channel", ch),
+                    ("version", str(ver)),
+                ]
+                rows_to_get.append(pk)
+
+            table_item = TableInBatchGetRowItem(
+                self._checkpoint_blobs_table,
+                rows_to_get,
+                max_version=1,
+            )
+            request = BatchGetRowRequest()
+            request.add(table_item)
+            response = self._client.batch_get_row(request)
+
+            table_results = response.get_result_by_table(
+                self._checkpoint_blobs_table
+            )
+            for item in table_results:
+                if not item.is_ok or item.row is None:
+                    continue
+                pk = self._pk_to_dict(item.row.primary_key)
+                attrs = self._attrs_to_dict(item.row.attribute_columns)
+                channel_name = pk.get("channel", "")
+                results[channel_name] = {
+                    "blob_type": attrs.get("blob_type", ""),
+                    "blob_data": attrs.get("blob_data", ""),
+                }
+
+        return results
+
+    async def delete_thread_checkpoints_async(
+        self,
+        thread_id: str,
+    ) -> None:
+        """删除指定 thread_id 的所有 checkpoint 相关数据（异步）。
+
+        扫描并删除 checkpoint、checkpoint_writes、checkpoint_blobs 三张表中
+        所有以 thread_id 为分区键的行。
+        """
+        await self._scan_and_delete_async(
+            self._checkpoint_table,
+            [
+                ("thread_id", thread_id),
+                ("checkpoint_ns", INF_MIN),
+                ("checkpoint_id", INF_MIN),
+            ],
+            [
+                ("thread_id", thread_id),
+                ("checkpoint_ns", INF_MAX),
+                ("checkpoint_id", INF_MAX),
+            ],
+        )
+        await self._scan_and_delete_async(
+            self._checkpoint_writes_table,
+            [
+                ("thread_id", thread_id),
+                ("checkpoint_ns", INF_MIN),
+                ("checkpoint_id", INF_MIN),
+                ("task_idx", INF_MIN),
+            ],
+            [
+                ("thread_id", thread_id),
+                ("checkpoint_ns", INF_MAX),
+                ("checkpoint_id", INF_MAX),
+                ("task_idx", INF_MAX),
+            ],
+        )
+        await self._scan_and_delete_async(
+            self._checkpoint_blobs_table,
+            [
+                ("thread_id", thread_id),
+                ("checkpoint_ns", INF_MIN),
+                ("channel", INF_MIN),
+                ("version", INF_MIN),
+            ],
+            [
+                ("thread_id", thread_id),
+                ("checkpoint_ns", INF_MAX),
+                ("channel", INF_MAX),
+                ("version", INF_MAX),
+            ],
+        )
+
+    def delete_thread_checkpoints(
+        self,
+        thread_id: str,
+    ) -> None:
+        """删除指定 thread_id 的所有 checkpoint 相关数据（同步）。
+
+        扫描并删除 checkpoint、checkpoint_writes、checkpoint_blobs 三张表中
+        所有以 thread_id 为分区键的行。
+        """
+        self._scan_and_delete(
+            self._checkpoint_table,
+            [
+                ("thread_id", thread_id),
+                ("checkpoint_ns", INF_MIN),
+                ("checkpoint_id", INF_MIN),
+            ],
+            [
+                ("thread_id", thread_id),
+                ("checkpoint_ns", INF_MAX),
+                ("checkpoint_id", INF_MAX),
+            ],
+        )
+        self._scan_and_delete(
+            self._checkpoint_writes_table,
+            [
+                ("thread_id", thread_id),
+                ("checkpoint_ns", INF_MIN),
+                ("checkpoint_id", INF_MIN),
+                ("task_idx", INF_MIN),
+            ],
+            [
+                ("thread_id", thread_id),
+                ("checkpoint_ns", INF_MAX),
+                ("checkpoint_id", INF_MAX),
+                ("task_idx", INF_MAX),
+            ],
+        )
+        self._scan_and_delete(
+            self._checkpoint_blobs_table,
+            [
+                ("thread_id", thread_id),
+                ("checkpoint_ns", INF_MIN),
+                ("channel", INF_MIN),
+                ("version", INF_MIN),
+            ],
+            [
+                ("thread_id", thread_id),
+                ("checkpoint_ns", INF_MAX),
+                ("channel", INF_MAX),
+                ("version", INF_MAX),
+            ],
+        )
+
+    async def _scan_and_delete_async(
+        self,
+        table_name: str,
+        inclusive_start: list[Any],
+        exclusive_end: list[Any],
+    ) -> None:
+        """通用扫描删除：GetRange 扫描 PK 后 BatchWriteRow 删除（异步）。"""
+        all_pks: list[Any] = []
+        next_start = inclusive_start
+
+        while True:
+            _, next_token, rows, _ = await self._async_client.get_range(
+                table_name,
+                Direction.FORWARD,
+                next_start,
+                exclusive_end,
+                columns_to_get=[],
+                max_version=1,
+            )
+            for row in rows:
+                all_pks.append(row.primary_key)
+            if next_token is None:
+                break
+            next_start = next_token
+
+        if not all_pks:
+            return
+
+        for i in range(0, len(all_pks), _BATCH_WRITE_LIMIT):
+            batch = all_pks[i : i + _BATCH_WRITE_LIMIT]
+            delete_items = []
+            for pk in batch:
+                row = Row(pk)
+                condition = Condition(RowExistenceExpectation.IGNORE)
+                delete_items.append(DeleteRowItem(row, condition))
+
+            request = BatchWriteRowRequest()
+            request.add(TableInBatchWriteRowItem(table_name, delete_items))
+            await self._async_client.batch_write_row(request)
+
+    # -----------------------------------------------------------------------
+    # 内部辅助方法（I/O 相关，异步）
+    # -----------------------------------------------------------------------
+
+    def _scan_and_delete(
+        self,
+        table_name: str,
+        inclusive_start: list[Any],
+        exclusive_end: list[Any],
+    ) -> None:
+        """通用扫描删除：GetRange 扫描 PK 后 BatchWriteRow 删除（同步）。"""
+        all_pks: list[Any] = []
+        next_start = inclusive_start
+
+        while True:
+            _, next_token, rows, _ = self._client.get_range(
+                table_name,
+                Direction.FORWARD,
+                next_start,
+                exclusive_end,
+                columns_to_get=[],
+                max_version=1,
+            )
+            for row in rows:
+                all_pks.append(row.primary_key)
+            if next_token is None:
+                break
+            next_start = next_token
+
+        if not all_pks:
+            return
+
+        for i in range(0, len(all_pks), _BATCH_WRITE_LIMIT):
+            batch = all_pks[i : i + _BATCH_WRITE_LIMIT]
+            delete_items = []
+            for pk in batch:
+                row = Row(pk)
+                condition = Condition(RowExistenceExpectation.IGNORE)
+                delete_items.append(DeleteRowItem(row, condition))
+
+            request = BatchWriteRowRequest()
+            request.add(TableInBatchWriteRowItem(table_name, delete_items))
+            self._client.batch_write_row(request)
 
     # -----------------------------------------------------------------------
     # 内部辅助方法（I/O 相关，同步）

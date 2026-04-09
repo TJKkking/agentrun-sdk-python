@@ -56,6 +56,148 @@ class SessionStore:
         """
         await self._backend.init_search_index_async()
 
+    async def init_checkpoint_tables_async(self) -> None:
+        """创建 LangGraph checkpoint 相关的 3 张表（异步）。
+
+        包含 checkpoint、checkpoint_writes、checkpoint_blobs 表。
+        表已存在时跳过，可重复调用。
+        """
+        await self._backend.init_checkpoint_tables_async()
+
+    async def init_langchain_tables_async(self) -> None:
+        """创建 LangChain 所需的全部表和索引（异步）。
+
+        包含核心表（Conversation + Event + 二级索引）和多元索引。
+        表或索引已存在时跳过，可重复调用。
+        """
+        await self._backend.init_core_tables_async()
+        await self._backend.init_search_index_async()
+
+    async def init_langgraph_tables_async(self) -> None:
+        """创建 LangGraph 所需的全部表和索引（异步）。
+
+        包含核心表（Conversation + Event + 二级索引）、多元索引
+        以及 checkpoint 相关的 3 张表（checkpoint / checkpoint_writes / checkpoint_blobs）。
+        表或索引已存在时跳过，可重复调用。
+        """
+        await self._backend.init_core_tables_async()
+        await self._backend.init_search_index_async()
+        await self._backend.init_checkpoint_tables_async()
+
+    # -------------------------------------------------------------------
+    # Checkpoint 管理（LangGraph）（异步）
+    # -------------------------------------------------------------------
+
+    async def put_checkpoint_async(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        checkpoint_id: str,
+        *,
+        checkpoint_type: str,
+        checkpoint_data: str,
+        metadata_json: str,
+        parent_checkpoint_id: str = "",
+    ) -> None:
+        """写入/覆盖 checkpoint 行（异步）。"""
+        await self._backend.put_checkpoint_async(
+            thread_id,
+            checkpoint_ns,
+            checkpoint_id,
+            checkpoint_type=checkpoint_type,
+            checkpoint_data=checkpoint_data,
+            metadata_json=metadata_json,
+            parent_checkpoint_id=parent_checkpoint_id,
+        )
+
+    async def get_checkpoint_async(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        checkpoint_id: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        """读取单条 checkpoint（异步）。
+
+        若 checkpoint_id 为 None，返回最新的 checkpoint。
+        """
+        return await self._backend.get_checkpoint_async(
+            thread_id, checkpoint_ns, checkpoint_id
+        )
+
+    async def list_checkpoints_async(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        *,
+        limit: int = 10,
+        before: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """列出 checkpoint（按 checkpoint_id 倒序）（异步）。"""
+        return await self._backend.list_checkpoints_async(
+            thread_id, checkpoint_ns, limit=limit, before=before
+        )
+
+    async def put_checkpoint_writes_async(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        checkpoint_id: str,
+        writes: list[dict[str, Any]],
+    ) -> None:
+        """批量写入 checkpoint writes（异步）。"""
+        await self._backend.put_checkpoint_writes_async(
+            thread_id, checkpoint_ns, checkpoint_id, writes
+        )
+
+    async def get_checkpoint_writes_async(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        checkpoint_id: str,
+    ) -> list[dict[str, Any]]:
+        """读取指定 checkpoint 的所有 writes（异步）。"""
+        return await self._backend.get_checkpoint_writes_async(
+            thread_id, checkpoint_ns, checkpoint_id
+        )
+
+    async def put_checkpoint_blob_async(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        channel: str,
+        version: str,
+        *,
+        blob_type: str,
+        blob_data: str,
+    ) -> None:
+        """写入/覆盖 checkpoint blob 行（异步）。"""
+        await self._backend.put_checkpoint_blob_async(
+            thread_id,
+            checkpoint_ns,
+            channel,
+            version,
+            blob_type=blob_type,
+            blob_data=blob_data,
+        )
+
+    async def get_checkpoint_blobs_async(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        channel_versions: dict[str, str],
+    ) -> dict[str, dict[str, str]]:
+        """批量读取 checkpoint blobs（异步）。"""
+        return await self._backend.get_checkpoint_blobs_async(
+            thread_id, checkpoint_ns, channel_versions
+        )
+
+    async def delete_thread_checkpoints_async(
+        self,
+        thread_id: str,
+    ) -> None:
+        """删除指定 thread 的所有 checkpoint 相关数据（异步）。"""
+        await self._backend.delete_thread_checkpoints_async(thread_id)
+
     # -------------------------------------------------------------------
     # Session 管理（异步）/ Session management (async)
     # -------------------------------------------------------------------
@@ -695,11 +837,8 @@ class SessionStore:
                 "agentrun 主包未安装。请先安装: pip install agentrun"
             ) from e
 
-        from tablestore import AsyncOTSClient  # type: ignore[import-untyped]
-        from tablestore import OTSClient  # type: ignore[import-untyped]
-        from tablestore import WriteRetryPolicy
-
         from agentrun.conversation_service.utils import (
+            build_ots_clients,
             convert_vpc_endpoint_to_public,
         )
 
@@ -745,21 +884,13 @@ class SessionStore:
         sts_token = security_token if security_token else None
 
         # 4. 构建 OTSClient + AsyncOTSClient 和 OTSBackend
-        ots_client = OTSClient(
+        # 使用 utils.build_ots_clients 避免 codegen 替换 AsyncOTSClient
+        ots_client, async_ots_client = build_ots_clients(
             endpoint,
             access_key_id,
             access_key_secret,
             instance_name,
             sts_token=sts_token,
-            retry_policy=WriteRetryPolicy(),
-        )
-        async_ots_client = AsyncOTSClient(
-            endpoint,
-            access_key_id,
-            access_key_secret,
-            instance_name,
-            sts_token=sts_token,
-            retry_policy=WriteRetryPolicy(),
         )
 
         backend = OTSBackend(

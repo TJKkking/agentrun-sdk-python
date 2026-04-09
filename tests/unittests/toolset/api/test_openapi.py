@@ -548,7 +548,9 @@ class TestOpenAPIWithRefRequestBuilding:
                             "content": {
                                 "application/json": {
                                     "schema": {
-                                        "$ref": "#/components/schemas/CreateOrderRequest"
+                                        "$ref": (
+                                            "#/components/schemas/CreateOrderRequest"
+                                        )
                                     }
                                 }
                             },
@@ -759,7 +761,9 @@ class TestOpenAPIEdgeCases:
                                 "content": {
                                     "application/json": {
                                         "schema": {
-                                            "$ref": "#/components/schemas/NonExistent"
+                                            "$ref": (
+                                                "#/components/schemas/NonExistent"
+                                            )
                                         }
                                     }
                                 }
@@ -792,7 +796,9 @@ class TestOpenAPIEdgeCases:
                                 "content": {
                                     "application/json": {
                                         "schema": {
-                                            "$ref": "https://example.com/schemas/external.json"
+                                            "$ref": (
+                                                "https://example.com/schemas/external.json"
+                                            )
                                         }
                                     }
                                 }
@@ -912,7 +918,9 @@ class TestCoffeeShopSchema:
                             "content": {
                                 "application/json": {
                                     "schema": {
-                                        "$ref": "#/components/schemas/CreateOrderRequest"
+                                        "$ref": (
+                                            "#/components/schemas/CreateOrderRequest"
+                                        )
                                     }
                                 }
                             },
@@ -948,7 +956,9 @@ class TestCoffeeShopSchema:
                             "content": {
                                 "application/json": {
                                     "schema": {
-                                        "$ref": "#/components/schemas/UpdateOrderStatusRequest"
+                                        "$ref": (
+                                            "#/components/schemas/UpdateOrderStatusRequest"
+                                        )
                                     }
                                 }
                             },
@@ -1219,7 +1229,9 @@ AGENTRUN_DATA_SCHEMA = {
     "openapi": "3.0.1",
     "info": {"title": "Test", "version": "1.0"},
     "servers": [{
-        "url": "https://1431999136518149.agentrun-data.cn-hangzhou.aliyuncs.com/tools/test/"
+        "url": (
+            "https://1431999136518149.agentrun-data.cn-hangzhou.aliyuncs.com/tools/test/"
+        )
     }],
     "paths": {
         "/invoke": {

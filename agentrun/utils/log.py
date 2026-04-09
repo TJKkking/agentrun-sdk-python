@@ -19,38 +19,45 @@ class CustomFormatter(logging.Formatter):
     Provides colorful log output format.
     """
 
-    FORMATS = {
-        "DEBUG": (
-            "\n\x1b[1;36m%(levelname)s\x1b[0m \x1b[36m[%(name)s] %(asctime)s"
-            " \x1b[2;3m%(pathname)s:%(lineno)s\x1b[0m\n\x1b[2m%(message)s\x1b[0m\n"
-        ),
-        "INFO": (
-            "\n\x1b[1;34m%(levelname)s\x1b[0m \x1b[34m[%(name)s] %(asctime)s"
-            " \x1b[2;3m%(pathname)s:%(lineno)s\x1b[0m\n%(message)s\n"
-        ),
-        "WARNING": (
-            "\n\x1b[1;33m%(levelname)s\x1b[0m \x1b[33m[%(name)s] %(asctime)s"
-            " \x1b[2;3m%(pathname)s:%(lineno)s\x1b[0m\n%(message)s\n"
-        ),
-        "ERROR": (
-            "\n\x1b[1;31m%(levelname)s\x1b[0m \x1b[31m[%(name)s] %(asctime)s"
-            " \x1b[2;3m%(pathname)s:%(lineno)s\x1b[0m\n%(message)s\n"
-        ),
-        "CRITICAL": (
-            "\n\x1b[1;31m%(levelname)s\x1b[0m \x1b[31m[%(name)s] %(asctime)s"
-            " \x1b[2;3m%(pathname)s:%(lineno)s\x1b[0m\n%(message)s\n"
-        ),
-        "DEFAULT": (
-            "\n%(levelname)s [%(name)s] %(asctime)s"
-            " \x1b[2;3m%(pathname)s:%(lineno)s\x1b[0m\n%(message)s\n"
-        ),
+    COLORS: dict[str, str] = {
+        "DEBUG": "\x1b[36m",
+        "INFO": "\x1b[34m",
+        "WARNING": "\x1b[33m",
+        "ERROR": "\x1b[31m",
+        "CRITICAL": "\x1b[1;31m",
     }
+    RESET = "\x1b[0m"
+    DIM = "\x1b[2;3m"
+    DIM_ONLY = "\x1b[2m"
 
-    def format(self, record):
-        formatter = logging.Formatter(
-            self.FORMATS.get(record.levelname, self.FORMATS["DEFAULT"])
+    def __init__(self) -> None:
+        super().__init__()
+        self._formatters: dict[str, logging.Formatter] = {}
+        for level, color in self.COLORS.items():
+            if level == "DEBUG":
+                fmt = (
+                    f"\n{color}%(levelname)s{self.RESET} {color}[%(name)s]"
+                    " %(asctime)s"
+                    f" {self.DIM}%(pathname)s:%(lineno)s{self.RESET}"
+                    f"\n{self.DIM_ONLY}%(message)s{self.RESET}"
+                )
+            else:
+                fmt = (
+                    f"\n{color}%(levelname)s{self.RESET} {color}[%(name)s]"
+                    " %(asctime)s"
+                    f" {self.DIM}%(pathname)s:%(lineno)s{self.RESET}"
+                    "\n%(message)s"
+                )
+            self._formatters[level] = logging.Formatter(fmt)
+        self._default = logging.Formatter(
+            "\n%(levelname)s [%(name)s] %(asctime)s"
+            " %(pathname)s:%(lineno)s\n%(message)s"
         )
-        return formatter.format(record)
+
+    def format(self, record: logging.LogRecord) -> str:
+        return self._formatters.get(record.levelname, self._default).format(
+            record
+        )
 
 
 logger = logging.getLogger("agentrun-logger")

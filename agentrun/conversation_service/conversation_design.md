@@ -175,6 +175,51 @@ Attributes:
 
 说明：三级 State 是 ADK 的概念，其他框架按需使用
 
+### Checkpoint 表（LangGraph）
+
+Checkpoint 表
+PK:
+    thread_id      (String, 分区键)
+    checkpoint_ns  (String)
+    checkpoint_id  (String)
+
+Attributes:
+    checkpoint_type        : String  -- serde dumps_typed 返回的类型标识
+    checkpoint_data        : String  -- serde 序列化后的 checkpoint（不含 channel_values），base64 编码
+    metadata               : String  -- JSON 序列化的 CheckpointMetadata
+    parent_checkpoint_id   : String  -- 父 checkpoint ID
+
+### Checkpoint_writes 表（LangGraph）
+
+Checkpoint_writes 表
+PK:
+    thread_id      (String, 分区键)
+    checkpoint_ns  (String)
+    checkpoint_id  (String)
+    task_idx       (String)   -- 格式: "{task_id}:{idx}"
+
+Attributes:
+    task_id    : String  -- 任务标识
+    task_path  : String  -- 任务路径
+    channel    : String  -- 写入通道名
+    value_type : String  -- serde 类型标识
+    value_data : String  -- base64 编码的序列化数据
+
+### Checkpoint_blobs 表（LangGraph）
+
+Checkpoint_blobs 表
+PK:
+    thread_id      (String, 分区键)
+    checkpoint_ns  (String)
+    channel        (String)
+    version        (String)
+
+Attributes:
+    blob_type  : String  -- serde 类型标识（"empty" 表示空通道）
+    blob_data  : String  -- base64 编码的序列化数据
+
+说明：使用 base64 编码而非 OTS Binary 类型，与现有 conversation_service 的 String 存储方式保持一致。
+
 ## 初始化策略
 
 表和索引按用途分组创建，避免为未使用的框架创建不必要的表：
@@ -184,8 +229,10 @@ Attributes:
 init_core_tables()       Conversation + Event + 二级索引              所有框架
 init_state_tables()      State + App_state + User_state             ADK 三级 State
 init_search_index()      conversation_search_index (多元索引)         需要搜索/过滤
-init_tables()            以上全部（向后兼容）                          快速开发
+init_checkpoint_tables() checkpoint + checkpoint_writes + checkpoint_blobs  LangGraph
+init_tables()            以上全部（不含 checkpoint 表，向后兼容）          快速开发
 多元索引创建耗时较长（数秒级），建议与核心表创建分离，不阻塞核心流程。
+checkpoint 表仅在使用 LangGraph 时需要，需显式调用 init_checkpoint_tables()。
 
 ## 分层架构
 
@@ -220,6 +267,7 @@ init_tables()            以上全部（向后兼容）                         
 │  │   init_core_tables()       # 核心表 + 二级索引    │    │
 │  │   init_state_tables()      # 三级 State 表       │    │
 │  │   init_search_index()      # 多元索引（按需）     │    │
+│  │   init_checkpoint_tables() # LangGraph checkpoint│    │
 │  │                                                 │    │
 │  │   # Session CRUD                                │    │
 │  │   create_session(...)  → ConversationSession     │    │
@@ -241,6 +289,13 @@ init_tables()            以上全部（向后兼容）                         
 │  │   get_app_state     / update_app_state           │    │
 │  │   get_user_state    / update_user_state          │    │
 │  │   get_merged_state(...)→ dict  # 三级浅合并       │    │
+│  │                                                 │    │
+│  │   # Checkpoint 管理（LangGraph）                  │    │
+│  │   put_checkpoint / get_checkpoint                │    │
+│  │   list_checkpoints                              │    │
+│  │   put_checkpoint_writes / get_checkpoint_writes  │    │
+│  │   put_checkpoint_blob / get_checkpoint_blobs     │    │
+│  │   delete_thread_checkpoints                      │    │
 │  └──────────────┬──────────────────────────────────┘    │
 │                 │                                       │
 ├─────────────────┼───────────────────────────────────────┤
@@ -260,3 +315,78 @@ init_tables()            以上全部（向后兼容）                         
 │                                                         │
 │  也可手动传入 OTSClient 构建 OTSBackend（向后兼容）        │
 └─────────────────────────────────────────────────────────┘
+
+## LangGraph 会话同步
+
+OTSCheckpointSaver 在指定 agent_id 后，每次 put() 会自动在 conversation 表
+中创建/更新会话记录：
+
+  session_id = thread_id
+  framework  = "langgraph"
+
+这使得外部服务（包括非 Python 服务）可以通过标准 OTS 查询：
+
+  1. conversation 表: GetRange(agent_id, user_id) → 列出所有 LangGraph 会话
+  2. 二级索引: 按 updated_at 排序
+  3. 多元索引: 按 framework="langgraph" 过滤
+
+### 跨语言查询 checkpoint 状态
+
+#### 序列化格式
+
+LangGraph 的 JsonPlusSerializer 使用 **msgpack**（非 JSON）序列化数据。
+存储到 OTS 时经过 base64 编码，因此 OTS 列中的数据格式为 base64(msgpack)。
+
+checkpoint_type / blob_type 列的值通常为 "msgpack"。
+
+#### 数据分类
+
+  简单类型（dict/list/str/int/float）：
+    msgpack 标准编码，任何语言的 msgpack 库可直接解码为原生结构。
+    Go: base64.Decode → msgpack.Unmarshal → map[string]interface{}
+
+  LangChain 对象（HumanMessage/AIMessage 等）：
+    编码为 msgpack Extension Type，内部嵌套 msgpack 数据：
+    ext(type=N, data=msgpack([module, class_name, kwargs_dict]))
+    其中 kwargs_dict 包含实际字段（content, type, name 等），是普通 dict。
+
+  Go 处理 ext type 的方式（以 vmihailenco/msgpack/v5 为例）：
+    注册 ext type decoder，将嵌套 msgpack 解码为 [module, class, kwargs] 数组，
+    取 kwargs（第 3 个元素）即可获取对象的实际属性值。
+
+#### 查询步骤
+
+  Step 1: checkpoint 表 GetRange
+    PK: (thread_id, checkpoint_ns="", checkpoint_id=INF_MAX→INF_MIN)
+    Direction: BACKWARD, Limit: 1
+    → 拿到最新行的 checkpoint_type, checkpoint_data, metadata
+
+  Step 2: base64 解码 + msgpack 解析
+    checkpoint_data: base64 decode → msgpack unmarshal
+    结果为 map: { v, id, ts, channel_versions, versions_seen, ... }
+    注意: channel_values 不在此表中，存储在 checkpoint_blobs 表
+    metadata 列是 JSON 字符串，可直接 json.Unmarshal
+
+  Step 3: checkpoint_blobs 表 BatchGetRow
+    从 Step 2 的 channel_versions 中提取 {channel: version}:
+    PK: (thread_id, checkpoint_ns="", channel, version)
+    → 拿到 blob_type, blob_data
+
+  Step 4: 解析 blob 数据
+    blob_data: base64 decode → msgpack unmarshal
+    - 简单 state 字段（str/int/list 等）：直接得到原生值
+    - LangChain Message 字段：得到 ext type，需自定义 decoder 提取 kwargs
+
+#### Go 示例伪代码
+
+  // 简单 state（无 LangChain 对象）
+  rawBytes, _ := base64.StdEncoding.DecodeString(blobData)
+  var value interface{}
+  _ = msgpack.Unmarshal(rawBytes, &value) // 直接可用
+
+  // 包含 LangChain 对象的 state
+  // 需要注册 ext type handler:
+  dec := msgpack.NewDecoder(bytes.NewReader(rawBytes))
+  dec.SetCustomStructTag("json")
+  // 对于 ext type 5 (Pydantic V2): 解码内部 [module, class, kwargs, method]
+  // 取 kwargs 即可拿到 {content: "...", type: "human", ...}
