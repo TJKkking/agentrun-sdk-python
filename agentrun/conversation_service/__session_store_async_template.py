@@ -84,6 +84,17 @@ class SessionStore:
         await self._backend.init_search_index_async()
         await self._backend.init_checkpoint_tables_async()
 
+    async def init_adk_tables_async(self) -> None:
+        """创建 Google ADK 所需的全部表和索引（异步）。
+
+        包含核心表（Conversation + Event + 二级索引）、三级 State 表
+        （state / app_state / user_state）以及多元索引。
+        表或索引已存在时跳过，可重复调用。
+        """
+        await self._backend.init_core_tables_async()
+        await self._backend.init_state_tables_async()
+        await self._backend.init_search_index_async()
+
     # -------------------------------------------------------------------
     # Checkpoint 管理（LangGraph）（异步）
     # -------------------------------------------------------------------

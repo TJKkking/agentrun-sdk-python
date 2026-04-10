@@ -133,10 +133,6 @@ class SessionStore:
         await self._backend.init_search_index_async()
         await self._backend.init_checkpoint_tables_async()
 
-    # -------------------------------------------------------------------
-    # Checkpoint 管理（LangGraph）（同步）
-    # -------------------------------------------------------------------
-
     def init_langgraph_tables(self) -> None:
         """创建 LangGraph 所需的全部表和索引（同步）。
 
@@ -148,8 +144,34 @@ class SessionStore:
         self._backend.init_search_index()
         self._backend.init_checkpoint_tables()
 
+    async def init_adk_tables_async(self) -> None:
+        """创建 Google ADK 所需的全部表和索引（异步）。
+
+        包含核心表（Conversation + Event + 二级索引）、三级 State 表
+        （state / app_state / user_state）以及多元索引。
+        表或索引已存在时跳过，可重复调用。
+        """
+        await self._backend.init_core_tables_async()
+        await self._backend.init_state_tables_async()
+        await self._backend.init_search_index_async()
+
     # -------------------------------------------------------------------
     # Checkpoint 管理（LangGraph）（异步）
+    # -------------------------------------------------------------------
+
+    def init_adk_tables(self) -> None:
+        """创建 Google ADK 所需的全部表和索引（同步）。
+
+        包含核心表（Conversation + Event + 二级索引）、三级 State 表
+        （state / app_state / user_state）以及多元索引。
+        表或索引已存在时跳过，可重复调用。
+        """
+        self._backend.init_core_tables()
+        self._backend.init_state_tables()
+        self._backend.init_search_index()
+
+    # -------------------------------------------------------------------
+    # Checkpoint 管理（LangGraph）（同步）
     # -------------------------------------------------------------------
 
     async def put_checkpoint_async(
@@ -366,7 +388,7 @@ class SessionStore:
         await self._backend.delete_thread_checkpoints_async(thread_id)
 
     # -------------------------------------------------------------------
-    # Checkpoint 清理（同步）
+    # Session 管理（异步）/ Session management (async)
     # -------------------------------------------------------------------
 
     def delete_thread_checkpoints(
@@ -377,7 +399,7 @@ class SessionStore:
         self._backend.delete_thread_checkpoints(thread_id)
 
     # -------------------------------------------------------------------
-    # Session 管理（异步）/ Session management (async)
+    # Session 管理（同步）/ Session management (async)
     # -------------------------------------------------------------------
 
     async def create_session_async(
@@ -425,10 +447,6 @@ class SessionStore:
         )
         await self._backend.put_session_async(session)
         return session
-
-    # -------------------------------------------------------------------
-    # Session 管理（同步）/ Session management (sync)
-    # -------------------------------------------------------------------
 
     def create_session(
         self,

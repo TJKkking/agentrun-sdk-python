@@ -10,10 +10,8 @@ import time
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from tablestore import (
-        AsyncOTSClient,  # type: ignore[import-untyped]
-        OTSClient,
-    )
+    from tablestore import AsyncOTSClient  # type: ignore[import-untyped]
+    from tablestore import OTSClient
 
 # OTS 单个属性列值上限为 2MB，留 0.5MB 余量（按字符数计）
 MAX_COLUMN_SIZE: int = 1_500_000  # 1.5M 字符
