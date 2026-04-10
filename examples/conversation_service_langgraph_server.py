@@ -27,6 +27,7 @@ import uuid
 
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -138,7 +139,7 @@ async def invoke_agent(req: AgentRequest):
     """
     thread_id = _get_thread_id(req)
     user_id = _get_user_id(req)
-    config = {
+    config: RunnableConfig = {
         "configurable": {"thread_id": thread_id},
         "metadata": {"user_id": user_id},
     }
