@@ -23,6 +23,11 @@ DEFAULT_CONVERSATION_SECONDARY_INDEX = "conversation_secondary_index"
 DEFAULT_CONVERSATION_SEARCH_INDEX = "conversation_search_index"
 DEFAULT_STATE_SEARCH_INDEX = "state_search_index"
 
+# LangGraph checkpoint 表
+DEFAULT_CHECKPOINT_TABLE = "checkpoint"
+DEFAULT_CHECKPOINT_WRITES_TABLE = "checkpoint_writes"
+DEFAULT_CHECKPOINT_BLOBS_TABLE = "checkpoint_blobs"
+
 
 # ---------------------------------------------------------------------------
 # 枚举

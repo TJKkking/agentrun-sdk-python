@@ -7,7 +7,11 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tablestore import AsyncOTSClient  # type: ignore[import-untyped]
+    from tablestore import OTSClient
 
 # OTS 单个属性列值上限为 2MB，留 0.5MB 余量（按字符数计）
 MAX_COLUMN_SIZE: int = 1_500_000  # 1.5M 字符
@@ -97,3 +101,40 @@ def from_chunks(chunks: list[str]) -> str:
         拼接后的完整字符串。
     """
     return "".join(chunks)
+
+
+def build_ots_clients(
+    endpoint: str,
+    access_key_id: str,
+    access_key_secret: str,
+    instance_name: str,
+    *,
+    sts_token: str | None = None,
+) -> tuple[OTSClient, AsyncOTSClient]:
+    """构建 OTSClient 和 AsyncOTSClient 实例。
+
+    独立于 codegen 模板，避免 AsyncOTSClient 被替换为 OTSClient。
+
+    Returns:
+        (ots_client, async_ots_client) 二元组。
+    """
+    from tablestore import AsyncOTSClient  # type: ignore[import-untyped]
+    from tablestore import OTSClient, WriteRetryPolicy
+
+    ots_client = OTSClient(
+        endpoint,
+        access_key_id,
+        access_key_secret,
+        instance_name,
+        sts_token=sts_token,
+        retry_policy=WriteRetryPolicy(),
+    )
+    async_ots_client = AsyncOTSClient(
+        endpoint,
+        access_key_id,
+        access_key_secret,
+        instance_name,
+        sts_token=sts_token,
+        retry_policy=WriteRetryPolicy(),
+    )
+    return ots_client, async_ots_client

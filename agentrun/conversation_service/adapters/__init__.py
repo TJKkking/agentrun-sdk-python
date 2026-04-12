@@ -15,7 +15,16 @@ try:
 except ImportError:
     pass
 
+# LangGraph adapter 依赖 langgraph，仅在安装了 langgraph 时可用
+try:
+    from agentrun.conversation_service.adapters.langgraph_adapter import (
+        OTSCheckpointSaver,
+    )
+except ImportError:
+    pass
+
 __all__ = [
     "OTSChatMessageHistory",
     "OTSSessionService",
+    "OTSCheckpointSaver",
 ]

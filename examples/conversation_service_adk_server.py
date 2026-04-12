@@ -1,7 +1,7 @@
 """Google ADK Agent Server —— 使用 OTSSessionService 持久化会话。
 
 集成步骤：
-  Step 1: 初始化 SessionStore（OTS 后端）
+  Step 1: 初始化 SessionStore + 创建 ADK 所需表和索引
   Step 2: 创建 OTSSessionService
   Step 3: 创建 ADK Agent + Runner，传入 session_service
   Step 4: 实现 invoke_agent，将 AgentRequest 转为 ADK 调用并流式输出
@@ -71,10 +71,10 @@ def get_session_state(tool_context: ToolContext) -> dict[str, Any]:
     return tool_context.state.to_dict()
 
 
-# ── Step 1: 初始化 SessionStore ──────────────────────────────
+# ── Step 1: 初始化 SessionStore + 创建 ADK 所需表和索引 ────
 
 store = SessionStore.from_memory_collection(MEMORY_COLLECTION_NAME)
-store.init_tables()
+store.init_adk_tables()
 
 # ── Step 2: 创建 OTSSessionService ──────────────────────────
 

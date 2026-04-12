@@ -11,7 +11,7 @@ ADK Agent ──→ OTSSessionService ──┐
                                   │    ┌─────────────┐    ┌─────────┐
 LangChain ──→ OTSChatMessageHistory ──→│ SessionStore │───→│  OTS    │
                                   │    │ (业务逻辑层)  │───→│ Tables  │
-LangGraph ──→ (LG Adapter)  ─────┘    └─────────────┘    └─────────┘
+LangGraph ──→ OTSCheckpointSaver ─┘    └─────────────┘    └─────────┘
                                               │
                                         OTSBackend
                                        (存储操作层)
@@ -78,9 +78,11 @@ store.init_tables()
 | `init_core_tables()` | Conversation + Event + 二级索引 | 所有框架 |
 | `init_state_tables()` | State + App_state + User_state | ADK 三级 State |
 | `init_search_index()` | 多元索引（conversation_search_index） | 需要搜索/过滤 |
-| `init_tables()` | 以上全部 | 快速开发 |
+| `init_checkpoint_tables()` | checkpoint + checkpoint_writes + checkpoint_blobs | LangGraph |
+| `init_tables()` | 核心表 + State 表 + 多元索引（不含 checkpoint 表） | 快速开发 |
 
 > 多元索引创建耗时较长（数秒级），建议与核心表创建分离，不阻塞核心流程。
+> checkpoint 表仅在使用 LangGraph 时需要，需显式调用 `init_checkpoint_tables()`。
 
 ## 使用示例
 
@@ -143,6 +145,57 @@ for msg in history.messages:
     print(f"{msg.type}: {msg.content}")
 ```
 
+### LangGraph 集成
+
+```python
+import asyncio
+from langgraph.graph import StateGraph, START, END
+from agentrun.conversation_service import SessionStore
+from agentrun.conversation_service.adapters import OTSCheckpointSaver
+
+# 初始化
+store = SessionStore.from_memory_collection("my-collection")
+store.init_core_tables()          # conversation 表（会话同步需要）
+store.init_checkpoint_tables()    # checkpoint 相关表
+
+# 创建 checkpointer（指定 agent_id 后自动同步 conversation 记录）
+checkpointer = OTSCheckpointSaver(
+    store, agent_id="my_agent", user_id="default_user"
+)
+
+# 构建 Graph
+graph = StateGraph(MyState)
+graph.add_node("step", my_node)
+graph.add_edge(START, "step")
+graph.add_edge("step", END)
+app = graph.compile(checkpointer=checkpointer)
+
+# 对话（自动持久化 checkpoint 到 OTS + 同步 conversation 记录）
+async def chat():
+    config = {
+        "configurable": {"thread_id": "thread-1"},
+        "metadata": {"user_id": "user_1"},  # 可选，覆盖默认 user_id
+    }
+    result = await app.ainvoke({"messages": [...]}, config=config)
+    # 再次调用同一 thread_id 会自动恢复状态
+    result2 = await app.ainvoke({"messages": [...]}, config=config)
+
+asyncio.run(chat())
+```
+
+> **会话同步**：指定 `agent_id` 后，每次 `put()` 会自动在 conversation 表中创建/更新会话记录（`session_id = thread_id`，`framework = "langgraph"`）。这使得外部服务可以通过 `agent_id / user_id` 查询到 LangGraph 的所有会话。
+
+### 跨语言查询 LangGraph 状态
+
+外部服务（如 Go 后端）可直接通过 OTS SDK 查询 LangGraph 会话状态：
+
+1. **列出会话**：查询 conversation 表（按 `agent_id/user_id`，过滤 `framework = "langgraph"`）
+2. **读取最新 checkpoint**：用 `session_id`（即 `thread_id`）查询 checkpoint 表（GetRange BACKWARD limit=1）
+3. **解析数据**：`checkpoint_data` 和 `blob_data` 为 `base64(msgpack)` 格式，Go 使用 msgpack 库（如 `github.com/vmihailenco/msgpack/v5`）解码
+4. **注意**：对于包含 LangChain 对象（HumanMessage 等）的 blob，msgpack 中包含 ext type，需要自定义 decoder 提取 kwargs
+
+详细序列化格式说明和 Go 伪代码见 [conversation_design.md](./conversation_design.md#跨语言查询-checkpoint-状态)。
+
 ### 直接使用 SessionStore
 
 ```python
@@ -195,10 +248,11 @@ store.delete_session("agent_1", "user_1", "sess_1")
 
 | 方法 | 说明 |
 |------|------|
-| `init_tables()` | 创建所有表和索引 |
+| `init_tables()` | 创建所有表和索引（不含 checkpoint） |
 | `init_core_tables()` | 创建核心表 + 二级索引 |
 | `init_state_tables()` | 创建三张 State 表 |
 | `init_search_index()` | 创建多元索引 |
+| `init_checkpoint_tables()` | 创建 LangGraph checkpoint 表 |
 
 **Session 管理**
 
@@ -230,12 +284,26 @@ store.delete_session("agent_1", "user_1", "sess_1")
 | `get_user_state / update_user_state` | 用户级状态读写 |
 | `get_merged_state(agent_id, user_id, session_id)` | 三级状态浅合并 |
 
+**Checkpoint 管理（LangGraph）**
+
+| 方法 | 说明 |
+|------|------|
+| `put_checkpoint(thread_id, checkpoint_ns, checkpoint_id, ...)` | 写入 checkpoint |
+| `get_checkpoint(thread_id, checkpoint_ns, checkpoint_id)` | 读取 checkpoint |
+| `list_checkpoints(thread_id, checkpoint_ns, *, limit, before)` | 列出 checkpoint |
+| `put_checkpoint_writes(thread_id, checkpoint_ns, checkpoint_id, writes)` | 批量写入 writes |
+| `get_checkpoint_writes(thread_id, checkpoint_ns, checkpoint_id)` | 读取 writes |
+| `put_checkpoint_blob(thread_id, checkpoint_ns, channel, version, ...)` | 写入 blob |
+| `get_checkpoint_blobs(thread_id, checkpoint_ns, channel_versions)` | 批量读取 blobs |
+| `delete_thread_checkpoints(thread_id)` | 删除 thread 全部 checkpoint 数据 |
+
 ### 框架适配器
 
 | 适配器 | 框架 | 基类 |
 |--------|------|------|
 | `OTSSessionService` | Google ADK | `BaseSessionService` |
 | `OTSChatMessageHistory` | LangChain | `BaseChatMessageHistory` |
+| `OTSCheckpointSaver` | LangGraph | `BaseCheckpointSaver` |
 
 ### 领域模型
 
@@ -248,7 +316,7 @@ store.delete_session("agent_1", "user_1", "sess_1")
 
 ## OTS 表结构
 
-共五张表 + 一个二级索引 + 一个多元索引：
+共八张表 + 一个二级索引 + 两个多元索引：
 
 | 表名 | 主键 | 用途 |
 |------|------|------|
@@ -257,6 +325,9 @@ store.delete_session("agent_1", "user_1", "sess_1")
 | `state` | agent_id, user_id, session_id | 会话级状态 |
 | `app_state` | agent_id | 应用级状态 |
 | `user_state` | agent_id, user_id | 用户级状态 |
+| `checkpoint` | thread_id, checkpoint_ns, checkpoint_id | LangGraph checkpoint |
+| `checkpoint_writes` | thread_id, checkpoint_ns, checkpoint_id, task_idx | LangGraph 中间写入 |
+| `checkpoint_blobs` | thread_id, checkpoint_ns, channel, version | LangGraph 通道值快照 |
 | `conversation_secondary_index` | agent_id, user_id, updated_at, session_id | 二级索引（list 热路径） |
 | `conversation_search_index` | 多元索引 | 全文搜索 / 标签过滤 / 组合查询 |
 
@@ -271,6 +342,7 @@ store.delete_session("agent_1", "user_1", "sess_1")
 | [`conversation_service_adk_data.py`](../../examples/conversation_service_adk_data.py) | ADK 模拟数据填充 + 多元索引搜索验证 |
 | [`conversation_service_langchain_example.py`](../../examples/conversation_service_langchain_example.py) | LangChain 消息历史读写验证 |
 | [`conversation_service_langchain_data.py`](../../examples/conversation_service_langchain_data.py) | LangChain 模拟数据填充 |
+| [`conversation_service_langgraph_example.py`](../../examples/conversation_service_langgraph_example.py) | LangGraph checkpoint 持久化示例 |
 | [`conversation_service_verify.py`](../../examples/conversation_service_verify.py) | 端到端 CRUD 验证脚本 |
 
 ## 环境变量
