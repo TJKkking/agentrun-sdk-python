@@ -57,22 +57,26 @@ from agentrun.credential import (
     CredentialUpdateInput,
     RelatedResource,
 )
-# Memory Collection
-from agentrun.memory_collection import (
-    EmbedderConfig,
-    EmbedderConfigConfig,
-    LLMConfig,
-    LLMConfigConfig,
-    MemoryCollection,
-    MemoryCollectionClient,
-    MemoryCollectionCreateInput,
-    MemoryCollectionListInput,
-    MemoryCollectionListOutput,
-    MemoryCollectionUpdateInput,
-    NetworkConfiguration,
-    VectorStoreConfig,
-    VectorStoreConfigConfig,
-)
+
+# Memory Collection - 延迟导入以避免 tablestore/mem0ai 等重型依赖
+# Lazy import to avoid heavy dependencies (tablestore, mem0ai, numpy, etc.)
+# Type hints for IDE and type checkers
+if TYPE_CHECKING:
+    from agentrun.memory_collection import (
+        EmbedderConfig,
+        EmbedderConfigConfig,
+        LLMConfig,
+        LLMConfigConfig,
+        MemoryCollection,
+        MemoryCollectionClient,
+        MemoryCollectionCreateInput,
+        MemoryCollectionListInput,
+        MemoryCollectionListOutput,
+        MemoryCollectionUpdateInput,
+        NetworkConfiguration,
+        VectorStoreConfig,
+        VectorStoreConfigConfig,
+    )
 # Model Service
 from agentrun.model import (
     BackendType,
@@ -304,6 +308,24 @@ __all__ = [
     "Config",
 ]
 
+# Memory Collection 模块的所有导出（延迟加载）
+# Memory Collection module exports (lazy loaded)
+_MEMORY_COLLECTION_EXPORTS = {
+    "MemoryCollection",
+    "MemoryCollectionClient",
+    "EmbedderConfig",
+    "EmbedderConfigConfig",
+    "LLMConfig",
+    "LLMConfigConfig",
+    "NetworkConfiguration",
+    "VectorStoreConfig",
+    "VectorStoreConfigConfig",
+    "MemoryCollectionCreateInput",
+    "MemoryCollectionUpdateInput",
+    "MemoryCollectionListInput",
+    "MemoryCollectionListOutput",
+}
+
 # Server 模块的所有导出
 _SERVER_EXPORTS = {
     "AgentRunServer",
@@ -346,11 +368,19 @@ _OPTIONAL_PACKAGES = {
 
 
 def __getattr__(name: str):
-    """延迟加载 server 模块的导出，避免可选依赖导致导入失败
+    """延迟加载 server / memory_collection 模块的导出，避免重型依赖在
+    import agentrun 时被立即加载。
 
-    当用户访问 server 相关的类时，才尝试导入 server 模块。
-    如果 server 可选依赖未安装，会抛出清晰的错误提示。
+    Lazy-load server / memory_collection module exports to avoid pulling in
+    heavy dependencies (tablestore, mem0ai, fastapi, etc.) at import time.
     """
+    # Memory Collection 模块（延迟加载以避免 tablestore/mem0ai 依赖）
+    if name in _MEMORY_COLLECTION_EXPORTS:
+        from agentrun import memory_collection
+
+        return getattr(memory_collection, name)
+
+    # Server 模块（延迟加载以避免 fastapi/uvicorn 依赖）
     if name in _SERVER_EXPORTS:
         try:
             from agentrun import server

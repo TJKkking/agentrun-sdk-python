@@ -22,6 +22,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# CLI 最小依赖集 / Minimal dependencies for CLI binary packaging
+core = [
+    "click>=8.0.0",
+    "rich>=13.0.0",
+]
+
 server = [
     "fastapi>=0.104.0",
     "uvicorn>=0.24.0",

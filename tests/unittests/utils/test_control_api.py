@@ -282,7 +282,7 @@ class TestControlAPIGetDevsClient:
 class TestControlAPIGetBailianClient:
     """测试 ControlAPI._get_bailian_client"""
 
-    @patch("agentrun.utils.control_api.BailianClient")
+    @patch("alibabacloud_bailian20231229.client.Client")
     def test_get_bailian_client_basic(self, mock_client_class):
         """测试获取基本百炼客户端"""
         config = Config(
@@ -304,7 +304,7 @@ class TestControlAPIGetBailianClient:
         assert config_arg.access_key_secret == "sk"
         assert config_arg.region_id == "cn-hangzhou"
 
-    @patch("agentrun.utils.control_api.BailianClient")
+    @patch("alibabacloud_bailian20231229.client.Client")
     def test_get_bailian_client_strips_https_prefix(self, mock_client_class):
         """测试获取百炼客户端时去除 https:// 前缀"""
         config = Config(
@@ -323,7 +323,7 @@ class TestControlAPIGetBailianClient:
         config_arg = call_args[0][0]
         assert config_arg.endpoint == "bailian.cn-hangzhou.aliyuncs.com"
 
-    @patch("agentrun.utils.control_api.BailianClient")
+    @patch("alibabacloud_bailian20231229.client.Client")
     def test_get_bailian_client_strips_http_prefix(self, mock_client_class):
         """测试获取百炼客户端时去除 http:// 前缀"""
         config = Config(
@@ -346,7 +346,7 @@ class TestControlAPIGetBailianClient:
 class TestControlAPIGetGPDBClient:
     """测试 ControlAPI._get_gpdb_client"""
 
-    @patch("agentrun.utils.control_api.GPDBClient")
+    @patch("alibabacloud_gpdb20160503.client.Client")
     def test_get_gpdb_client_known_region(self, mock_client_class):
         """测试已知 region 使用通用 endpoint"""
         config = Config(
@@ -365,7 +365,7 @@ class TestControlAPIGetGPDBClient:
         config_arg = call_args[0][0]
         assert config_arg.endpoint == "gpdb.aliyuncs.com"
 
-    @patch("agentrun.utils.control_api.GPDBClient")
+    @patch("alibabacloud_gpdb20160503.client.Client")
     def test_get_gpdb_client_unknown_region(self, mock_client_class):
         """测试未知 region 使用区域级别 endpoint"""
         config = Config(
@@ -384,7 +384,7 @@ class TestControlAPIGetGPDBClient:
         config_arg = call_args[0][0]
         assert config_arg.endpoint == "gpdb.us-west-1.aliyuncs.com"
 
-    @patch("agentrun.utils.control_api.GPDBClient")
+    @patch("alibabacloud_gpdb20160503.client.Client")
     def test_get_gpdb_client_all_known_regions(self, mock_client_class):
         """测试所有已知 region 使用通用 endpoint"""
         known_regions = [

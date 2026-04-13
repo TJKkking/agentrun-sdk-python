@@ -4,15 +4,21 @@
 This module defines the base class for control API.
 """
 
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from alibabacloud_agentrun20250910.client import Client as AgentRunClient
-from alibabacloud_bailian20231229.client import Client as BailianClient
 from alibabacloud_devs20230714.client import Client as DevsClient
-from alibabacloud_gpdb20160503.client import Client as GPDBClient
 from alibabacloud_tea_openapi import utils_models as open_api_util_models
 
 from agentrun.utils.config import Config
+
+# 延迟导入：BailianClient 和 GPDBClient 仅在 knowledgebase 模块使用，
+# 不在顶层导入以减少非 knowledgebase 场景的依赖加载。
+# Lazy import: BailianClient and GPDBClient are only used by the knowledgebase
+# module. Deferring import to reduce dependency loading for non-KB scenarios.
+if TYPE_CHECKING:
+    from alibabacloud_bailian20231229.client import Client as BailianClient
+    from alibabacloud_gpdb20160503.client import Client as GPDBClient
 
 
 class ControlAPI:
@@ -88,6 +94,7 @@ class ControlAPI:
         Returns:
             BailianClient: 百炼 API 客户端实例 / Bailian API client instance
         """
+        from alibabacloud_bailian20231229.client import Client as BailianClient
 
         cfg = Config.with_configs(self.config, config)
         endpoint = cfg.get_bailian_endpoint()
@@ -116,6 +123,7 @@ class ControlAPI:
         Returns:
             GPDBClient: GPDB API 客户端实例 / GPDB API client instance
         """
+        from alibabacloud_gpdb20160503.client import Client as GPDBClient
 
         cfg = Config.with_configs(self.config, config)
         # GPDB 使用区域级别的 endpoint / GPDB uses region-level endpoint
