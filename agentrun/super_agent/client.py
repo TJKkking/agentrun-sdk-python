@@ -32,6 +32,7 @@ from agentrun.agent_runtime.model import AgentRuntimeListInput
 from agentrun.agent_runtime.runtime import AgentRuntime
 from agentrun.super_agent.agent import SuperAgent
 from agentrun.super_agent.api.control import (
+    ensure_super_agent_patches_applied,
     from_agent_runtime,
     is_super_agent,
     SUPER_AGENT_TAG,
@@ -96,6 +97,9 @@ class SuperAgentClient:
     """Super Agent CRUDL 客户端."""
 
     def __init__(self, config: Optional[Config] = None) -> None:
+        # 按需打 Dara SDK 兼容补丁 (幂等)。放在本构造函数里, 让 "仅 import
+        # agentrun.super_agent" 的调用方不被动承担全局 SDK 副作用。
+        ensure_super_agent_patches_applied()
         self.config = config
         self._rt = AgentRuntimeClient(config=config)
         # create/update 绕过 AgentRuntimeClient 的 artifact_type 校验 (SUPER_AGENT 不需要 code/container),
@@ -312,19 +316,22 @@ class SuperAgentClient:
         return agent
 
     # ─── Update (read-merge-write) ─────────────────────
+    # 参数默认值 ``_UNSET`` 是内部哨兵 (object())。为保留 IDE 自动补全与 mypy
+    # 类型检查, 签名保持精确类型标注, 对 ``= _UNSET`` 的赋值加 ``type: ignore``。
+    # 未传 = 保持不变, 显式传 None = 清空字段。
     async def update_async(
         self,
         name: str,
         *,
-        description: Any = _UNSET,
-        prompt: Any = _UNSET,
-        agents: Any = _UNSET,
-        tools: Any = _UNSET,
-        skills: Any = _UNSET,
-        sandboxes: Any = _UNSET,
-        workspaces: Any = _UNSET,
-        model_service_name: Any = _UNSET,
-        model_name: Any = _UNSET,
+        description: Optional[str] = _UNSET,  # type: ignore[assignment]
+        prompt: Optional[str] = _UNSET,  # type: ignore[assignment]
+        agents: Optional[List[str]] = _UNSET,  # type: ignore[assignment]
+        tools: Optional[List[str]] = _UNSET,  # type: ignore[assignment]
+        skills: Optional[List[str]] = _UNSET,  # type: ignore[assignment]
+        sandboxes: Optional[List[str]] = _UNSET,  # type: ignore[assignment]
+        workspaces: Optional[List[str]] = _UNSET,  # type: ignore[assignment]
+        model_service_name: Optional[str] = _UNSET,  # type: ignore[assignment]
+        model_name: Optional[str] = _UNSET,  # type: ignore[assignment]
         config: Optional[Config] = None,
     ) -> SuperAgent:
         """异步更新超级 Agent (read-merge-write)."""
@@ -366,15 +373,15 @@ class SuperAgentClient:
         self,
         name: str,
         *,
-        description: Any = _UNSET,
-        prompt: Any = _UNSET,
-        agents: Any = _UNSET,
-        tools: Any = _UNSET,
-        skills: Any = _UNSET,
-        sandboxes: Any = _UNSET,
-        workspaces: Any = _UNSET,
-        model_service_name: Any = _UNSET,
-        model_name: Any = _UNSET,
+        description: Optional[str] = _UNSET,  # type: ignore[assignment]
+        prompt: Optional[str] = _UNSET,  # type: ignore[assignment]
+        agents: Optional[List[str]] = _UNSET,  # type: ignore[assignment]
+        tools: Optional[List[str]] = _UNSET,  # type: ignore[assignment]
+        skills: Optional[List[str]] = _UNSET,  # type: ignore[assignment]
+        sandboxes: Optional[List[str]] = _UNSET,  # type: ignore[assignment]
+        workspaces: Optional[List[str]] = _UNSET,  # type: ignore[assignment]
+        model_service_name: Optional[str] = _UNSET,  # type: ignore[assignment]
+        model_name: Optional[str] = _UNSET,  # type: ignore[assignment]
         config: Optional[Config] = None,
     ) -> SuperAgent:
         """同步更新超级 Agent (read-merge-write)."""

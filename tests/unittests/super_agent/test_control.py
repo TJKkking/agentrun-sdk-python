@@ -10,6 +10,7 @@ from agentrun.super_agent.api.control import (
     _add_ram_prefix_to_host,
     API_VERSION,
     build_super_agent_endpoint,
+    ensure_super_agent_patches_applied,
     EXTERNAL_TAG,
     from_agent_runtime,
     is_super_agent,
@@ -22,6 +23,10 @@ from agentrun.super_agent.api.control import (
 )
 from agentrun.super_agent.api.data import SuperAgentDataAPI
 from agentrun.utils.config import Config
+
+# 本文件部分测试 (list request tags 补丁) 依赖 Dara SDK 已被打过补丁,
+# 显式在模块加载时触发补丁 (幂等, 与 SuperAgentClient.__init__ 内触发点一致)。
+ensure_super_agent_patches_applied()
 
 # ─── build_super_agent_endpoint ────────────────────────────────
 
@@ -282,7 +287,7 @@ def test_to_update_input_full_protocol_replace():
 
 
 # ─── Dara ListAgentRuntimesRequest tags 补丁 ──────────────────
-# 同时确保 import agentrun.super_agent.api.control 已应用补丁 (已在文件顶部导入)。
+# 补丁已在模块顶部通过 ensure_super_agent_patches_applied() 显式触发。
 
 
 def test_list_request_from_map_preserves_tags():

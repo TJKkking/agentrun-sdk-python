@@ -23,7 +23,7 @@
 
 from __future__ import annotations
 
-from typing import AsyncIterator, Dict, Literal, Optional, Type
+from typing import AsyncGenerator, Dict, Literal, Optional, Type
 
 from ag_ui.core import (
     BaseEvent,
@@ -113,7 +113,7 @@ async def as_agui_events(
     stream: InvokeStream,
     *,
     on_unknown: UnknownMode = "raise",
-) -> AsyncIterator[BaseEvent]:
+) -> AsyncGenerator[BaseEvent, None]:
     """把 :class:`InvokeStream` 中的原始 :class:`SSEEvent` 解码为强类型流.
 
     无论正常消费结束、中途异常、解码异常, 都保证 ``await stream.aclose()`` 被调用

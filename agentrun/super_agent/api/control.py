@@ -14,8 +14,11 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from urllib.parse import urlparse, urlunparse
+
+if TYPE_CHECKING:
+    from agentrun.super_agent.agent import SuperAgent
 
 from alibabacloud_agentrun20250910.client import Client as _DaraClient
 from alibabacloud_agentrun20250910.models import (
@@ -59,6 +62,12 @@ SUPER_AGENT_NAMESPACE = (
 )
 
 _RAM_DATA_DOMAINS = ("agentrun-data", "funagent-data-pre")
+
+# SUPER_AGENT 不跑用户 container/code, 但服务端强制要求 artifact/container_configuration 非空,
+# 这里给一个占位镜像地址即可。region 取杭州仅为了格式合法, 服务端不会实际 pull。
+_PLACEHOLDER_IMAGE = (
+    "registry.cn-hangzhou.aliyuncs.com/agentrun/super-agent-placeholder:v1"
+)
 
 
 # ─── URL 工具 ──────────────────────────────────────────
@@ -143,14 +152,23 @@ class _SuperAgentUpdateInput(AgentRuntimeUpdateInput):
         return super().model_dump(**kwargs)
 
 
-# ─── Dara 模型猴补丁 ──────────────────────────────────────
-# Dara 的 ``ProtocolConfiguration`` 当前版本没有 ``externalEndpoint`` 字段;
-# ``AgentRuntimeClient.create_async/update_async`` 内部做
-# ``CreateAgentRuntimeInput().from_map(pydantic.model_dump())`` 的 roundtrip,
-# 会在 Dara 层丢失此字段。这里做一次加性 patch: 仅追加读写 ``externalEndpoint``,
-# 不改变任何现有字段行为, 用模块级哨兵属性保证幂等。
+# ─── Dara 模型/客户端猴补丁 ──────────────────────────────────────
+# 当前版 Dara SDK 缺 ``ProtocolConfiguration.externalEndpoint`` 和
+# ``CreateAgentRuntimeInput/UpdateAgentRuntimeInput/ListAgentRuntimesRequest.tags``
+# 字段, 会在 Pydantic ↔ Dara ``from_map / to_map`` roundtrip 中静默丢失; 且
+# ``Client.list_agent_runtimes_with_options{,_async}`` 不会把 ``tags`` 写到 query。
+#
+# 所有补丁都延迟到 ``SuperAgentClient`` 实例化时 (见
+# ``ensure_super_agent_patches_applied``) 才触发, 避免仅 import 本模块的调用方
+# 被动承担全局副作用。补丁本身用哨兵属性保证幂等, 重复调用安全。
+# TODO: 等 Dara SDK 原生支持后删除。
 
-if not getattr(_DaraProtocolConfiguration, "_super_agent_patched", False):
+
+def _patch_dara_protocol_configuration() -> None:
+    """补齐 ``ProtocolConfiguration.externalEndpoint`` 的 from_map/to_map 读写."""
+    if getattr(_DaraProtocolConfiguration, "_super_agent_patched", False):
+        return
+
     _orig_to_map = _DaraProtocolConfiguration.to_map
     _orig_from_map = _DaraProtocolConfiguration.from_map
 
@@ -174,10 +192,8 @@ if not getattr(_DaraProtocolConfiguration, "_super_agent_patched", False):
     _DaraProtocolConfiguration._super_agent_patched = True  # type: ignore[attr-defined]
 
 
-# Dara 的 ``CreateAgentRuntimeInput`` / ``UpdateAgentRuntimeInput`` 当前版本没有
-# ``tags`` 字段, 与 ``ProtocolConfiguration`` 同理会在 Pydantic → Dara 的 roundtrip
-# 中被静默丢弃. 这里沿用同款加性 patch, 只补齐 ``tags`` 字段的读写.
 def _patch_dara_tags(cls: Any) -> None:
+    """给 Dara model 补齐 ``tags`` 字段的 from_map/to_map 读写."""
     if getattr(cls, "_super_agent_tags_patched", False):
         return
     _orig_to_map = cls.to_map
@@ -201,22 +217,6 @@ def _patch_dara_tags(cls: Any) -> None:
     cls._super_agent_tags_patched = True  # type: ignore[attr-defined]
 
 
-_patch_dara_tags(_DaraCreateAgentRuntimeInput)
-_patch_dara_tags(_DaraUpdateAgentRuntimeInput)
-# ``ListAgentRuntimesRequest`` 同样没有 ``tags`` 字段: 补上 from_map/to_map 以保留
-# 属性; 真正让服务端生效的查询参数注入由下面的 client 级补丁完成。
-_patch_dara_tags(_DaraListAgentRuntimesRequest)
-
-
-# ─── Dara 客户端猴补丁: list 请求 query 注入 tags ───────────────
-# 现版 Dara ``Client.list_agent_runtimes_with_options`` 不读 ``request.tags``
-# 构造 query, 导致即便 Pydantic 侧把 tags 传下来, 服务端也收不到。这里一次性
-# 包裹同步 / 异步两个方法: 若 request 带有 ``tags`` 就在底层 ``call_api`` 调用
-# 前把 ``tags`` (列表 → 逗号分隔) 追加到 ``req.query``。
-# 每个 API 调用都会 ``_get_client()`` 新建 ``Client`` 实例, 实例属性级别的替换
-# 在并发下是安全的。
-
-
 def _tags_query_value(tags: Any) -> Optional[str]:
     if tags is None:
         return None
@@ -228,6 +228,13 @@ def _tags_query_value(tags: Any) -> Optional[str]:
 
 
 def _patch_dara_client_list_tags() -> None:
+    """包裹 ``Client.list_agent_runtimes_with_options{,_async}``: 若 request 带
+    ``tags`` 就在底层 ``call_api`` 调用前把 ``tags`` (列表 → 逗号分隔) 追加到
+    ``req.query``。
+
+    每次 API 调用由 ``_get_client()`` 新建 ``Client`` 实例, 实例属性级别的
+    ``self.call_api = _injecting`` 替换在并发下是安全的。
+    """
     if getattr(_DaraClient, "_super_agent_list_tags_patched", False):
         return
 
@@ -285,7 +292,20 @@ def _patch_dara_client_list_tags() -> None:
     _DaraClient._super_agent_list_tags_patched = True  # type: ignore[attr-defined]
 
 
-_patch_dara_client_list_tags()
+def ensure_super_agent_patches_applied() -> None:
+    """按需应用全部 Dara SDK 兼容补丁 (幂等)。
+
+    由 ``SuperAgentClient.__init__`` 调用。如果调用方直接使用
+    ``to_create_input`` / ``to_update_input`` 并自己构造 ``CreateAgentRuntimeInput``
+    / ``ListAgentRuntimesRequest``, 也应在 Pydantic → Dara 转换前调用一次本函数。
+    """
+    _patch_dara_protocol_configuration()
+    _patch_dara_tags(_DaraCreateAgentRuntimeInput)
+    _patch_dara_tags(_DaraUpdateAgentRuntimeInput)
+    # ``ListAgentRuntimesRequest`` 补齐 from_map/to_map 保留属性; 真正让服务端
+    # 生效的 query 注入由 ``_patch_dara_client_list_tags`` 完成。
+    _patch_dara_tags(_DaraListAgentRuntimesRequest)
+    _patch_dara_client_list_tags()
 
 
 # ─── AgentRuntime ↔ SuperAgent 转换 ────────────────────────
@@ -392,9 +412,7 @@ def to_create_input(
         external_agent_endpoint_url=build_super_agent_endpoint(cfg),
         # 占位 artifact: SUPER_AGENT 不跑用户 container/code, 但服务端要求非空。
         artifact_type=AgentRuntimeArtifact.CONTAINER,
-        container_configuration=AgentRuntimeContainer(
-            image="registry.cn-hangzhou.aliyuncs.com/agentrun/super-agent-placeholder:v1"
-        ),
+        container_configuration=AgentRuntimeContainer(image=_PLACEHOLDER_IMAGE),
         network_configuration=NetworkConfig(network_mode=NetworkMode.PUBLIC),
     )
 
@@ -425,9 +443,7 @@ def to_update_input(
         external_agent_endpoint_url=build_super_agent_endpoint(cfg),
         # 占位 artifact: SUPER_AGENT 不跑用户 container/code, 但服务端要求非空。
         artifact_type=AgentRuntimeArtifact.CONTAINER,
-        container_configuration=AgentRuntimeContainer(
-            image="registry.cn-hangzhou.aliyuncs.com/agentrun/super-agent-placeholder:v1"
-        ),
+        container_configuration=AgentRuntimeContainer(image=_PLACEHOLDER_IMAGE),
         network_configuration=NetworkConfig(network_mode=NetworkMode.PUBLIC),
     )
 
@@ -502,7 +518,7 @@ def _get_external_endpoint(rt: AgentRuntime) -> str:
     )
 
 
-def from_agent_runtime(rt: AgentRuntime) -> "SuperAgent":  # noqa: F821
+def from_agent_runtime(rt: AgentRuntime) -> "SuperAgent":
     """反解 AgentRuntime → SuperAgent 实例 (不注入 ``_client``)."""
     # 延迟导入避免循环
     from agentrun.super_agent.agent import SuperAgent
@@ -547,4 +563,5 @@ __all__ = [
     "from_agent_runtime",
     "is_super_agent",
     "parse_super_agent_config",
+    "ensure_super_agent_patches_applied",
 ]
