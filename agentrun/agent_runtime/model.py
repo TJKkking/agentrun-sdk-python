@@ -185,6 +185,7 @@ class AgentRuntimeProtocolType(str, Enum):
 
     HTTP = "HTTP"
     MCP = "MCP"
+    SUPER_AGENT = "SUPER_AGENT"
 
 
 class AgentRuntimeProtocolConfig(BaseModel):
