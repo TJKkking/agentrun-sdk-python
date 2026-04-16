@@ -35,6 +35,10 @@ from tablestore import (
 )
 
 from agentrun.conversation_service.model import (
+    CHECKPOINT_BLOBS_SCHEMA_VERSION,
+    CHECKPOINT_SCHEMA_VERSION,
+    CHECKPOINT_WRITES_SCHEMA_VERSION,
+    CONVERSATION_SCHEMA_VERSION,
     ConversationEvent,
     ConversationSession,
     DEFAULT_APP_STATE_TABLE,
@@ -48,6 +52,9 @@ from agentrun.conversation_service.model import (
     DEFAULT_STATE_SEARCH_INDEX,
     DEFAULT_STATE_TABLE,
     DEFAULT_USER_STATE_TABLE,
+    EVENT_SCHEMA_VERSION,
+    SCHEMA_VERSION_COLUMN,
+    STATE_SCHEMA_VERSION,
     StateData,
     StateScope,
 )
@@ -607,6 +614,7 @@ class OTSBackend:
         ]
 
         attribute_columns = [
+            (SCHEMA_VERSION_COLUMN, CONVERSATION_SCHEMA_VERSION),
             ("created_at", session.created_at),
             ("updated_at", session.updated_at),
             ("is_pinned", session.is_pinned),
@@ -991,6 +999,7 @@ class OTSBackend:
 
         content_json = json.dumps(content, ensure_ascii=False)
         attribute_columns = [
+            (SCHEMA_VERSION_COLUMN, EVENT_SCHEMA_VERSION),
             ("type", event_type),
             ("content", content_json),
             ("created_at", created_at),
@@ -1204,6 +1213,7 @@ class OTSBackend:
         state_json = serialize_state(state)
 
         put_cols: list[tuple[str, Any]] = [
+            (SCHEMA_VERSION_COLUMN, STATE_SCHEMA_VERSION),
             ("updated_at", now),
             ("version", version + 1),
         ]
@@ -1349,6 +1359,7 @@ class OTSBackend:
             ("checkpoint_id", checkpoint_id),
         ]
         attribute_columns = [
+            (SCHEMA_VERSION_COLUMN, CHECKPOINT_SCHEMA_VERSION),
             ("checkpoint_type", checkpoint_type),
             ("checkpoint_data", checkpoint_data),
             ("metadata", metadata_json),
@@ -1502,6 +1513,7 @@ class OTSBackend:
                     ("task_idx", w["task_idx"]),
                 ]
                 attrs = [
+                    (SCHEMA_VERSION_COLUMN, CHECKPOINT_WRITES_SCHEMA_VERSION),
                     ("task_id", w["task_id"]),
                     ("task_path", w.get("task_path", "")),
                     ("channel", w["channel"]),
@@ -1580,6 +1592,7 @@ class OTSBackend:
             ("version", version),
         ]
         attribute_columns = [
+            (SCHEMA_VERSION_COLUMN, CHECKPOINT_BLOBS_SCHEMA_VERSION),
             ("blob_type", blob_type),
             ("blob_data", blob_data),
         ]

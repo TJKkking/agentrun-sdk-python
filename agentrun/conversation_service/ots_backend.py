@@ -45,6 +45,10 @@ from tablestore import (
 )
 
 from agentrun.conversation_service.model import (
+    CHECKPOINT_BLOBS_SCHEMA_VERSION,
+    CHECKPOINT_SCHEMA_VERSION,
+    CHECKPOINT_WRITES_SCHEMA_VERSION,
+    CONVERSATION_SCHEMA_VERSION,
     ConversationEvent,
     ConversationSession,
     DEFAULT_APP_STATE_TABLE,
@@ -58,6 +62,9 @@ from agentrun.conversation_service.model import (
     DEFAULT_STATE_SEARCH_INDEX,
     DEFAULT_STATE_TABLE,
     DEFAULT_USER_STATE_TABLE,
+    EVENT_SCHEMA_VERSION,
+    SCHEMA_VERSION_COLUMN,
+    STATE_SCHEMA_VERSION,
     StateData,
     StateScope,
 )
@@ -991,19 +998,11 @@ class OTSBackend:
                 self._state_table,
             )
         except OTSServiceError as e:
-            err_str = str(e).lower()
-            if "already exist" in err_str or (
+            if "already exist" in str(e).lower() or (
                 hasattr(e, "code") and e.code == "OTSObjectAlreadyExist"
             ):
                 logger.warning(
                     "Search index %s already exists, skipping.",
-                    self._state_search_index,
-                )
-            elif "does not exist" in err_str and "table" in err_str:
-                logger.warning(
-                    "Table %s does not exist, skipping search index creation"
-                    " for %s.",
-                    self._state_table,
                     self._state_search_index,
                 )
             else:
@@ -1084,19 +1083,11 @@ class OTSBackend:
                 self._state_table,
             )
         except OTSServiceError as e:
-            err_str = str(e).lower()
-            if "already exist" in err_str or (
+            if "already exist" in str(e).lower() or (
                 hasattr(e, "code") and e.code == "OTSObjectAlreadyExist"
             ):
                 logger.warning(
                     "Search index %s already exists, skipping.",
-                    self._state_search_index,
-                )
-            elif "does not exist" in err_str and "table" in err_str:
-                logger.warning(
-                    "Table %s does not exist, skipping search index creation"
-                    " for %s.",
-                    self._state_table,
                     self._state_search_index,
                 )
             else:
@@ -1115,6 +1106,7 @@ class OTSBackend:
         ]
 
         attribute_columns = [
+            (SCHEMA_VERSION_COLUMN, CONVERSATION_SCHEMA_VERSION),
             ("created_at", session.created_at),
             ("updated_at", session.updated_at),
             ("is_pinned", session.is_pinned),
@@ -1148,6 +1140,7 @@ class OTSBackend:
         ]
 
         attribute_columns = [
+            (SCHEMA_VERSION_COLUMN, CONVERSATION_SCHEMA_VERSION),
             ("created_at", session.created_at),
             ("updated_at", session.updated_at),
             ("is_pinned", session.is_pinned),
@@ -1844,6 +1837,7 @@ class OTSBackend:
 
         content_json = json.dumps(content, ensure_ascii=False)
         attribute_columns = [
+            (SCHEMA_VERSION_COLUMN, EVENT_SCHEMA_VERSION),
             ("type", event_type),
             ("content", content_json),
             ("created_at", created_at),
@@ -1918,6 +1912,7 @@ class OTSBackend:
 
         content_json = json.dumps(content, ensure_ascii=False)
         attribute_columns = [
+            (SCHEMA_VERSION_COLUMN, EVENT_SCHEMA_VERSION),
             ("type", event_type),
             ("content", content_json),
             ("created_at", created_at),
@@ -2282,6 +2277,7 @@ class OTSBackend:
         state_json = serialize_state(state)
 
         put_cols: list[tuple[str, Any]] = [
+            (SCHEMA_VERSION_COLUMN, STATE_SCHEMA_VERSION),
             ("updated_at", now),
             ("version", version + 1),
         ]
@@ -2374,6 +2370,7 @@ class OTSBackend:
         state_json = serialize_state(state)
 
         put_cols: list[tuple[str, Any]] = [
+            (SCHEMA_VERSION_COLUMN, STATE_SCHEMA_VERSION),
             ("updated_at", now),
             ("version", version + 1),
         ]
@@ -2542,7 +2539,7 @@ class OTSBackend:
         await self._async_client.delete_row(table_name, row, condition)
 
     # -----------------------------------------------------------------------
-    # State CRUD（同步）
+    # Checkpoint CRUD（LangGraph）（异步）
     # -----------------------------------------------------------------------
 
     def delete_state_row(
@@ -2561,7 +2558,7 @@ class OTSBackend:
         self._client.delete_row(table_name, row, condition)
 
     # -----------------------------------------------------------------------
-    # Checkpoint CRUD（LangGraph）（异步）
+    # Checkpoint CRUD（LangGraph）（同步）
     # -----------------------------------------------------------------------
 
     async def put_checkpoint_async(
@@ -2582,6 +2579,7 @@ class OTSBackend:
             ("checkpoint_id", checkpoint_id),
         ]
         attribute_columns = [
+            (SCHEMA_VERSION_COLUMN, CHECKPOINT_SCHEMA_VERSION),
             ("checkpoint_type", checkpoint_type),
             ("checkpoint_data", checkpoint_data),
             ("metadata", metadata_json),
@@ -2590,10 +2588,6 @@ class OTSBackend:
         row = Row(primary_key, attribute_columns)
         condition = Condition(RowExistenceExpectation.IGNORE)
         await self._async_client.put_row(self._checkpoint_table, row, condition)
-
-    # -----------------------------------------------------------------------
-    # Checkpoint CRUD（LangGraph）（同步）
-    # -----------------------------------------------------------------------
 
     def put_checkpoint(
         self,
@@ -2613,6 +2607,7 @@ class OTSBackend:
             ("checkpoint_id", checkpoint_id),
         ]
         attribute_columns = [
+            (SCHEMA_VERSION_COLUMN, CHECKPOINT_SCHEMA_VERSION),
             ("checkpoint_type", checkpoint_type),
             ("checkpoint_data", checkpoint_data),
             ("metadata", metadata_json),
@@ -2881,6 +2876,7 @@ class OTSBackend:
                     ("task_idx", w["task_idx"]),
                 ]
                 attrs = [
+                    (SCHEMA_VERSION_COLUMN, CHECKPOINT_WRITES_SCHEMA_VERSION),
                     ("task_id", w["task_id"]),
                     ("task_path", w.get("task_path", "")),
                     ("channel", w["channel"]),
@@ -2928,6 +2924,7 @@ class OTSBackend:
                     ("task_idx", w["task_idx"]),
                 ]
                 attrs = [
+                    (SCHEMA_VERSION_COLUMN, CHECKPOINT_WRITES_SCHEMA_VERSION),
                     ("task_id", w["task_id"]),
                     ("task_path", w.get("task_path", "")),
                     ("channel", w["channel"]),
@@ -3048,6 +3045,7 @@ class OTSBackend:
             ("version", version),
         ]
         attribute_columns = [
+            (SCHEMA_VERSION_COLUMN, CHECKPOINT_BLOBS_SCHEMA_VERSION),
             ("blob_type", blob_type),
             ("blob_data", blob_data),
         ]
@@ -3075,6 +3073,7 @@ class OTSBackend:
             ("version", version),
         ]
         attribute_columns = [
+            (SCHEMA_VERSION_COLUMN, CHECKPOINT_BLOBS_SCHEMA_VERSION),
             ("blob_type", blob_type),
             ("blob_data", blob_data),
         ]
