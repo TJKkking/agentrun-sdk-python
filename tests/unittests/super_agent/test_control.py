@@ -11,7 +11,6 @@ from agentrun.super_agent.api.control import (
     API_VERSION,
     build_super_agent_endpoint,
     ensure_super_agent_patches_applied,
-    EXTERNAL_TAG,
     from_agent_runtime,
     is_super_agent,
     parse_super_agent_config,
@@ -24,7 +23,7 @@ from agentrun.super_agent.api.control import (
 from agentrun.super_agent.api.data import SuperAgentDataAPI
 from agentrun.utils.config import Config
 
-# 本文件部分测试 (list request tags 补丁) 依赖 Dara SDK 已被打过补丁,
+# 本文件部分测试依赖 Dara ProtocolConfiguration 已被打过补丁 (externalEndpoint),
 # 显式在模块加载时触发补丁 (幂等, 与 SuperAgentClient.__init__ 内触发点一致)。
 ensure_super_agent_patches_applied()
 
@@ -108,7 +107,7 @@ def test_to_create_input_minimal():
     cfg = Config(account_id="123", region_id="cn-hangzhou")
     inp = to_create_input("alpha", cfg=cfg)
     assert inp.agent_runtime_name == "alpha"
-    assert inp.tags == [SUPER_AGENT_TAG]
+    assert inp.system_tags == [SUPER_AGENT_TAG]
     pc = inp.protocol_configuration
     assert pc.type == SUPER_AGENT_PROTOCOL_TYPE
     assert pc.external_endpoint.endswith("/super-agents/__SUPER_AGENT__")
@@ -151,10 +150,10 @@ def test_to_create_input_full():
     assert forwarded["modelName"] == "bar"
 
 
-def test_to_create_input_tags_fixed():
+def test_to_create_input_system_tags_fixed():
     cfg = Config(account_id="123", region_id="cn-hangzhou")
     inp = to_create_input("c", cfg=cfg)
-    assert inp.tags == [SUPER_AGENT_TAG]
+    assert inp.system_tags == [SUPER_AGENT_TAG]
 
 
 def test_to_create_input_metadata_only_agent_runtime_name():
@@ -383,65 +382,31 @@ def test_to_update_input_full_protocol_replace():
     assert forwarded["tools"] == ["t"]
 
 
-# ─── Dara ListAgentRuntimesRequest tags 补丁 ──────────────────
-# 补丁已在模块顶部通过 ensure_super_agent_patches_applied() 显式触发。
+# ─── Dara ListAgentRuntimesRequest systemTags 原生字段 ──────────────
+# ``systemTags`` 已由 Dara SDK 原生支持, 无需补丁。以下测试只校验 pydantic →
+# Dara roundtrip 能把 ``system_tags`` 保留到请求 query。
 
 
-def test_list_request_from_map_preserves_tags():
+def test_list_request_from_map_preserves_system_tags():
     from alibabacloud_agentrun20250910.models import ListAgentRuntimesRequest
 
     req = ListAgentRuntimesRequest().from_map({
-        "tags": SUPER_AGENT_TAG,
+        "systemTags": SUPER_AGENT_TAG,
         "pageNumber": 1,
         "pageSize": 20,
     })
-    assert getattr(req, "tags", None) == SUPER_AGENT_TAG
+    assert req.system_tags == SUPER_AGENT_TAG
 
 
-def test_list_request_to_map_preserves_tags():
+def test_list_request_to_map_preserves_system_tags():
     from alibabacloud_agentrun20250910.models import ListAgentRuntimesRequest
 
     req = ListAgentRuntimesRequest()
-    req.tags = SUPER_AGENT_TAG
-    assert req.to_map().get("tags") == SUPER_AGENT_TAG
+    req.system_tags = SUPER_AGENT_TAG
+    assert req.to_map().get("systemTags") == SUPER_AGENT_TAG
 
 
-def _invoke_list_patch(tags_value):
-    """调用打过补丁的 ``list_agent_runtimes_with_options``, 捕获 call_api 的 query."""
-    from alibabacloud_agentrun20250910.client import Client as _DaraClient
-    from alibabacloud_agentrun20250910.models import ListAgentRuntimesRequest
-    from darabonba.runtime import RuntimeOptions
-
-    captured = {}
-
-    def _fake_call_api(self, params, req, rt):
-        captured["query"] = dict(req.query) if req.query else {}
-        raise RuntimeError("_stop_after_query_capture_")
-
-    client = _DaraClient.__new__(_DaraClient)
-    client._endpoint = "x"
-    # 绑定实例级 call_api (优先于类方法)
-    client.call_api = _fake_call_api.__get__(client, _DaraClient)
-
-    req = ListAgentRuntimesRequest(page_number=1, page_size=20)
-    req.tags = tags_value
-    with pytest.raises(RuntimeError, match="_stop_after_query_capture_"):
-        client.list_agent_runtimes_with_options(req, {}, RuntimeOptions())
-    return captured["query"]
-
-
-def test_list_with_options_injects_tags_str():
-    query = _invoke_list_patch(SUPER_AGENT_TAG)
-    assert query.get("tags") == SUPER_AGENT_TAG
-    assert query.get("pageNumber") == "1"
-
-
-def test_list_with_options_injects_tags_list_comma_join():
-    query = _invoke_list_patch([EXTERNAL_TAG, SUPER_AGENT_TAG])
-    assert query.get("tags") == f"{EXTERNAL_TAG},{SUPER_AGENT_TAG}"
-
-
-def test_list_with_options_no_tags_no_injection():
+def test_list_with_options_writes_system_tags_query():
     from alibabacloud_agentrun20250910.client import Client as _DaraClient
     from alibabacloud_agentrun20250910.models import ListAgentRuntimesRequest
     from darabonba.runtime import RuntimeOptions
@@ -456,32 +421,9 @@ def test_list_with_options_no_tags_no_injection():
     client._endpoint = "x"
     client.call_api = _fake_call_api.__get__(client, _DaraClient)
 
-    req = ListAgentRuntimesRequest(page_number=1, page_size=20)
+    req = ListAgentRuntimesRequest(
+        page_number=1, page_size=20, system_tags=SUPER_AGENT_TAG
+    )
     with pytest.raises(RuntimeError, match="_stop_"):
         client.list_agent_runtimes_with_options(req, {}, RuntimeOptions())
-    assert "tags" not in captured["query"]
-
-
-@pytest.mark.asyncio
-async def test_list_with_options_async_injects_tags():
-    from alibabacloud_agentrun20250910.client import Client as _DaraClient
-    from alibabacloud_agentrun20250910.models import ListAgentRuntimesRequest
-    from darabonba.runtime import RuntimeOptions
-
-    captured = {}
-
-    async def _fake_call_api_async(self, params, req, rt):
-        captured["query"] = dict(req.query) if req.query else {}
-        raise RuntimeError("_stop_")
-
-    client = _DaraClient.__new__(_DaraClient)
-    client._endpoint = "x"
-    client.call_api_async = _fake_call_api_async.__get__(client, _DaraClient)
-
-    req = ListAgentRuntimesRequest(page_number=1, page_size=20)
-    req.tags = SUPER_AGENT_TAG
-    with pytest.raises(RuntimeError, match="_stop_"):
-        await client.list_agent_runtimes_with_options_async(
-            req, {}, RuntimeOptions()
-        )
-    assert captured["query"].get("tags") == SUPER_AGENT_TAG
+    assert captured["query"].get("systemTags") == SUPER_AGENT_TAG

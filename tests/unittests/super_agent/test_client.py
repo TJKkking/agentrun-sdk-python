@@ -119,10 +119,7 @@ async def test_create_async_calls_runtime_with_correct_input():
     dara = captured_input["dara"]
     # Dara-level model uses snake_case attributes
     assert dara.agent_runtime_name == "alpha"
-    # 注: alibabacloud-agentrun20250910 的 Dara CreateAgentRuntimeInput 目前
-    # 不包含 ``tags`` 字段, pydantic → Dara roundtrip 会丢弃. 校验 pydantic 侧
-    # 的 rt_input 是否含 tags 在 test_control.py::test_to_create_input_tags_fixed
-    # 已覆盖.
+    assert dara.system_tags == [SUPER_AGENT_TAG]
     pc = dara.protocol_configuration
     # externalEndpoint preserved via the additive Dara monkey-patch
     assert pc.external_endpoint.endswith("/super-agents/__SUPER_AGENT__")
@@ -337,7 +334,7 @@ async def test_list_async_default_pagination():
         await client.list_async()
     assert captured["inp"].page_number == 1
     assert captured["inp"].page_size == 20
-    assert captured["inp"].tags == SUPER_AGENT_TAG
+    assert captured["inp"].system_tags == SUPER_AGENT_TAG
 
 
 async def test_list_async_custom_pagination():

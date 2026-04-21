@@ -20,18 +20,8 @@ from urllib.parse import urlparse, urlunparse
 if TYPE_CHECKING:
     from agentrun.super_agent.agent import SuperAgent
 
-from alibabacloud_agentrun20250910.client import Client as _DaraClient
-from alibabacloud_agentrun20250910.models import (
-    CreateAgentRuntimeInput as _DaraCreateAgentRuntimeInput,
-)
-from alibabacloud_agentrun20250910.models import (
-    ListAgentRuntimesRequest as _DaraListAgentRuntimesRequest,
-)
 from alibabacloud_agentrun20250910.models import (
     ProtocolConfiguration as _DaraProtocolConfiguration,
-)
-from alibabacloud_agentrun20250910.models import (
-    UpdateAgentRuntimeInput as _DaraUpdateAgentRuntimeInput,
 )
 from pydantic import Field
 
@@ -50,11 +40,12 @@ from agentrun.utils.model import NetworkConfig, NetworkMode
 API_VERSION = "2025-09-10"
 SUPER_AGENT_PROTOCOL_TYPE = "SUPER_AGENT"
 # ``SUPER_AGENT_TAG`` 标识下游 AgentRuntime 是超级 Agent, 用于 list 过滤。
+# 写入 ``systemTags`` 字段 (由服务端原生支持), create/update/list 的 system_tags 参数统一使用。
 SUPER_AGENT_TAG = "x-agentrun-super"
 # ``EXTERNAL_TAG`` 标识下游 AgentRuntime 由外部 (SuperAgent) 托管调用, 不由 AgentRun 直接托管。
 # 保留常量以便外部消费者引用; 创建超级 Agent 时不再写入此 tag。
 EXTERNAL_TAG = "x-agentrun-external"
-# 创建下游 AgentRuntime 时固定写入的 tag 列表: ``[SUPER_AGENT_TAG]`` (仅一个)。
+# 创建下游 AgentRuntime 时固定写入的 systemTags 列表: ``[SUPER_AGENT_TAG]`` (仅一个)。
 SUPER_AGENT_CREATE_TAGS = [SUPER_AGENT_TAG]
 SUPER_AGENT_RESOURCE_PATH = "__SUPER_AGENT__"
 SUPER_AGENT_INVOKE_PATH = "/invoke"
@@ -153,16 +144,15 @@ class _SuperAgentUpdateInput(AgentRuntimeUpdateInput):
         return super().model_dump(**kwargs)
 
 
-# ─── Dara 模型/客户端猴补丁 ──────────────────────────────────────
-# 当前版 Dara SDK 缺 ``ProtocolConfiguration.externalEndpoint`` 和
-# ``CreateAgentRuntimeInput/UpdateAgentRuntimeInput/ListAgentRuntimesRequest.tags``
-# 字段, 会在 Pydantic ↔ Dara ``from_map / to_map`` roundtrip 中静默丢失; 且
-# ``Client.list_agent_runtimes_with_options{,_async}`` 不会把 ``tags`` 写到 query。
+# ─── Dara 模型猴补丁 ──────────────────────────────────────
+# 当前版 Dara SDK 缺 ``ProtocolConfiguration.externalEndpoint`` 字段, 会在
+# Pydantic ↔ Dara ``from_map / to_map`` roundtrip 中静默丢失。补丁延迟到
+# ``SuperAgentClient`` 实例化时 (见 ``ensure_super_agent_patches_applied``) 才
+# 触发, 避免仅 import 本模块的调用方被动承担全局副作用。补丁用哨兵属性保证
+# 幂等, 重复调用安全。TODO: 等 Dara SDK 原生支持后删除。
 #
-# 所有补丁都延迟到 ``SuperAgentClient`` 实例化时 (见
-# ``ensure_super_agent_patches_applied``) 才触发, 避免仅 import 本模块的调用方
-# 被动承担全局副作用。补丁本身用哨兵属性保证幂等, 重复调用安全。
-# TODO: 等 Dara SDK 原生支持后删除。
+# ``tags`` (原 hack 写入) 已由 SDK 原生 ``systemTags`` 字段替代, 不再需要任何
+# 补丁; create/update/list 统一走 ``system_tags`` 参数。
 
 
 def _patch_dara_protocol_configuration() -> None:
@@ -193,120 +183,14 @@ def _patch_dara_protocol_configuration() -> None:
     _DaraProtocolConfiguration._super_agent_patched = True  # type: ignore[attr-defined]
 
 
-def _patch_dara_tags(cls: Any) -> None:
-    """给 Dara model 补齐 ``tags`` 字段的 from_map/to_map 读写."""
-    if getattr(cls, "_super_agent_tags_patched", False):
-        return
-    _orig_to_map = cls.to_map
-    _orig_from_map = cls.from_map
-
-    def _patched_to_map(self: Any) -> Dict[str, Any]:
-        result = _orig_to_map(self)
-        tags = getattr(self, "tags", None)
-        if tags is not None:
-            result["tags"] = tags
-        return result
-
-    def _patched_from_map(self: Any, m: Optional[Dict[str, Any]] = None) -> Any:
-        _orig_from_map(self, m)
-        if m and m.get("tags") is not None:
-            self.tags = m.get("tags")
-        return self
-
-    cls.to_map = _patched_to_map  # type: ignore[assignment]
-    cls.from_map = _patched_from_map  # type: ignore[assignment]
-    cls._super_agent_tags_patched = True  # type: ignore[attr-defined]
-
-
-def _tags_query_value(tags: Any) -> Optional[str]:
-    if tags is None:
-        return None
-    if isinstance(tags, str):
-        return tags
-    if isinstance(tags, (list, tuple)):
-        return ",".join(str(t) for t in tags)
-    return str(tags)
-
-
-def _patch_dara_client_list_tags() -> None:
-    """包裹 ``Client.list_agent_runtimes_with_options{,_async}``: 若 request 带
-    ``tags`` 就在底层 ``call_api`` 调用前把 ``tags`` (列表 → 逗号分隔) 追加到
-    ``req.query``。
-
-    每次 API 调用由 ``_get_client()`` 新建 ``Client`` 实例, 实例属性级别的
-    ``self.call_api = _injecting`` 替换在并发下是安全的。
-    """
-    if getattr(_DaraClient, "_super_agent_list_tags_patched", False):
-        return
-
-    _orig_sync = _DaraClient.list_agent_runtimes_with_options
-    _orig_async = _DaraClient.list_agent_runtimes_with_options_async
-
-    def _patched_sync(
-        self: Any, request: Any, headers: Any, runtime: Any
-    ) -> Any:
-        tags_value = _tags_query_value(getattr(request, "tags", None))
-        if tags_value is None:
-            return _orig_sync(self, request, headers, runtime)
-        orig_call_api = self.call_api
-
-        def _injecting(params: Any, req: Any, rt: Any) -> Any:
-            if req.query is None:
-                req.query = {}
-            req.query["tags"] = tags_value
-            return orig_call_api(params, req, rt)
-
-        self.call_api = _injecting
-        try:
-            return _orig_sync(self, request, headers, runtime)
-        finally:
-            try:
-                del self.call_api
-            except AttributeError:
-                pass
-
-    async def _patched_async(
-        self: Any, request: Any, headers: Any, runtime: Any
-    ) -> Any:
-        tags_value = _tags_query_value(getattr(request, "tags", None))
-        if tags_value is None:
-            return await _orig_async(self, request, headers, runtime)
-        orig_call_api_async = self.call_api_async
-
-        async def _injecting(params: Any, req: Any, rt: Any) -> Any:
-            if req.query is None:
-                req.query = {}
-            req.query["tags"] = tags_value
-            return await orig_call_api_async(params, req, rt)
-
-        self.call_api_async = _injecting
-        try:
-            return await _orig_async(self, request, headers, runtime)
-        finally:
-            try:
-                del self.call_api_async
-            except AttributeError:
-                pass
-
-    _DaraClient.list_agent_runtimes_with_options = _patched_sync  # type: ignore[assignment]
-    _DaraClient.list_agent_runtimes_with_options_async = _patched_async  # type: ignore[assignment]
-    _DaraClient._super_agent_list_tags_patched = True  # type: ignore[attr-defined]
-
-
 def ensure_super_agent_patches_applied() -> None:
-    """按需应用全部 Dara SDK 兼容补丁 (幂等)。
+    """按需应用 Dara SDK 兼容补丁 (幂等)。
 
     由 ``SuperAgentClient.__init__`` 调用。如果调用方直接使用
-    ``to_create_input`` / ``to_update_input`` 并自己构造 ``CreateAgentRuntimeInput``
-    / ``ListAgentRuntimesRequest``, 也应在 Pydantic → Dara 转换前调用一次本函数。
+    ``to_create_input`` / ``to_update_input`` 并自己构造 Dara 输入, 也应在
+    Pydantic → Dara 转换前调用一次本函数。
     """
     _patch_dara_protocol_configuration()
-    _patch_dara_tags(_DaraCreateAgentRuntimeInput)
-    _patch_dara_tags(_DaraUpdateAgentRuntimeInput)
-    # ``ListAgentRuntimesRequest`` 补齐 from_map/to_map 保留属性; 真正让服务端
-    # 生效的 query 注入由 ``_patch_dara_client_list_tags`` 完成。
-    _patch_dara_tags(_DaraListAgentRuntimesRequest)
-    _patch_dara_client_list_tags()
 
 
 # ─── AgentRuntime ↔ SuperAgent 转换 ────────────────────────
@@ -415,7 +299,7 @@ def to_create_input(
         agent_runtime_name=name,
         description=description,
         protocol_configuration=pc,
-        tags=list(SUPER_AGENT_CREATE_TAGS),
+        system_tags=list(SUPER_AGENT_CREATE_TAGS),
         # 超级 Agent 的数据面入口 (与 protocolConfiguration.externalEndpoint 同值)。
         external_agent_endpoint_url=build_super_agent_endpoint(cfg),
         # 占位 artifact: SUPER_AGENT 不跑用户 container/code, 但服务端要求非空。
@@ -446,7 +330,7 @@ def to_update_input(
         agent_runtime_name=name,
         description=merged.get("description"),
         protocol_configuration=pc,
-        tags=list(SUPER_AGENT_CREATE_TAGS),
+        system_tags=list(SUPER_AGENT_CREATE_TAGS),
         # 超级 Agent 的数据面入口 (与 protocolConfiguration.externalEndpoint 同值)。
         external_agent_endpoint_url=build_super_agent_endpoint(cfg),
         # 占位 artifact: SUPER_AGENT 不跑用户 container/code, 但服务端要求非空。

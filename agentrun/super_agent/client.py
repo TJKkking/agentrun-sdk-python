@@ -14,7 +14,7 @@ SuperAgentClient / 超级 Agent 客户端
 内部持有一个 :class:`AgentRuntimeClient` 实例, 通过 ``api/control.py`` 的
 转换函数把 ``SuperAgent`` 与 ``AgentRuntime`` 互相映射。
 
-list 固定按 tag ``x-agentrun-super`` 过滤, 不接受用户自定义 tag。
+list 固定按 systemTag ``x-agentrun-super`` 过滤, 不接受用户自定义 tag。
 """
 
 import asyncio
@@ -256,7 +256,7 @@ class SuperAgentClient:
                 AgentRuntimeListInput(
                     page_number=page_number,
                     page_size=page_size,
-                    tags=SUPER_AGENT_TAG,
+                    system_tags=SUPER_AGENT_TAG,
                 ),
                 config=cfg,
             )
@@ -278,7 +278,7 @@ class SuperAgentClient:
                 AgentRuntimeListInput(
                     page_number=page_number,
                     page_size=page_size,
-                    tags=SUPER_AGENT_TAG,
+                    system_tags=SUPER_AGENT_TAG,
                 ),
                 config=cfg,
             )
@@ -448,12 +448,12 @@ class SuperAgentClient:
         page_size: int = 20,
         config: Optional[Config] = None,
     ) -> List[SuperAgent]:
-        """异步列出超级 Agent (固定 tag 过滤, 过滤非 SUPER_AGENT)."""
+        """异步列出超级 Agent (固定 systemTag 过滤, 过滤非 SUPER_AGENT)."""
         cfg = Config.with_configs(self.config, config)
         rt_input = AgentRuntimeListInput(
             page_number=page_number,
             page_size=page_size,
-            tags=SUPER_AGENT_TAG,
+            system_tags=SUPER_AGENT_TAG,
         )
         runtimes = await self._rt.list_async(rt_input, config=cfg)
         result: List[SuperAgent] = []
@@ -472,12 +472,12 @@ class SuperAgentClient:
         page_size: int = 20,
         config: Optional[Config] = None,
     ) -> List[SuperAgent]:
-        """同步列出超级 Agent (固定 tag 过滤, 过滤非 SUPER_AGENT)."""
+        """同步列出超级 Agent (固定 systemTag 过滤, 过滤非 SUPER_AGENT)."""
         cfg = Config.with_configs(self.config, config)
         rt_input = AgentRuntimeListInput(
             page_number=page_number,
             page_size=page_size,
-            tags=SUPER_AGENT_TAG,
+            system_tags=SUPER_AGENT_TAG,
         )
         runtimes = self._rt.list(rt_input, config=cfg)
         result: List[SuperAgent] = []
