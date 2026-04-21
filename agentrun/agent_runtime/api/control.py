@@ -21,6 +21,9 @@ from alibabacloud_agentrun20250910.models import (
     CreateAgentRuntimeEndpointRequest,
     CreateAgentRuntimeInput,
     CreateAgentRuntimeRequest,
+    DeleteAgentRuntimeEndpointRequest,
+    DeleteAgentRuntimeRequest,
+    GetAgentRuntimeEndpointRequest,
     GetAgentRuntimeRequest,
     ListAgentRuntimeEndpointsOutput,
     ListAgentRuntimeEndpointsRequest,
@@ -193,6 +196,7 @@ class AgentRuntimeControlAPI(ControlAPI):
             client = self._get_client(config)
             response = client.delete_agent_runtime_with_options(
                 agent_id,
+                DeleteAgentRuntimeRequest(),
                 headers=headers or {},
                 runtime=RuntimeOptions(),
             )
@@ -248,6 +252,7 @@ class AgentRuntimeControlAPI(ControlAPI):
             client = self._get_client(config)
             response = await client.delete_agent_runtime_with_options_async(
                 agent_id,
+                DeleteAgentRuntimeRequest(),
                 headers=headers or {},
                 runtime=RuntimeOptions(),
             )
@@ -778,6 +783,7 @@ class AgentRuntimeControlAPI(ControlAPI):
             response = client.delete_agent_runtime_endpoint_with_options(
                 agent_id,
                 endpoint_id,
+                DeleteAgentRuntimeEndpointRequest(),
                 headers=headers or {},
                 runtime=RuntimeOptions(),
             )
@@ -838,6 +844,7 @@ class AgentRuntimeControlAPI(ControlAPI):
                 await client.delete_agent_runtime_endpoint_with_options_async(
                     agent_id,
                     endpoint_id,
+                    DeleteAgentRuntimeEndpointRequest(),
                     headers=headers or {},
                     runtime=RuntimeOptions(),
                 )
@@ -1028,6 +1035,7 @@ class AgentRuntimeControlAPI(ControlAPI):
             response = client.get_agent_runtime_endpoint_with_options(
                 agent_id,
                 endpoint_id,
+                GetAgentRuntimeEndpointRequest(),
                 headers=headers or {},
                 runtime=RuntimeOptions(),
             )
@@ -1088,6 +1096,7 @@ class AgentRuntimeControlAPI(ControlAPI):
                 await client.get_agent_runtime_endpoint_with_options_async(
                     agent_id,
                     endpoint_id,
+                    GetAgentRuntimeEndpointRequest(),
                     headers=headers or {},
                     runtime=RuntimeOptions(),
                 )

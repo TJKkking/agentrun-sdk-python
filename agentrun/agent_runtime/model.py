@@ -185,6 +185,7 @@ class AgentRuntimeProtocolType(str, Enum):
 
     HTTP = "HTTP"
     MCP = "MCP"
+    SUPER_AGENT = "SUPER_AGENT"
 
 
 class AgentRuntimeProtocolConfig(BaseModel):
@@ -251,6 +252,8 @@ class AgentRuntimeMutableProps(BaseModel):
     """会话空闲超时时间，单位：秒"""
     tags: Optional[List[str]] = None
     """标签列表"""
+    system_tags: Optional[List[str]] = None
+    """系统标签列表 (由平台内部使用, 例如 SuperAgent 用来标识下游 AgentRuntime)"""
 
 
 class AgentRuntimeImmutableProps(BaseModel):
@@ -322,6 +325,8 @@ class AgentRuntimeListInput(PageableInput):
     """Agent Runtime 名称"""
     tags: Optional[str] = None
     """标签过滤，多个标签用逗号分隔"""
+    system_tags: Optional[str] = None
+    """系统标签过滤, 多个标签用逗号分隔"""
     search_mode: Optional[str] = None
     """搜索模式"""
 

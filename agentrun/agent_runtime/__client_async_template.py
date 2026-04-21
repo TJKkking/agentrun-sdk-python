@@ -118,7 +118,12 @@ class AgentRuntimeClient:
             result = await self.__control_api.delete_agent_runtime_async(
                 id, config=config
             )
-            return AgentRuntime.from_inner_object(result)
+            # Delete 响应只有 agentRuntimeId 有效，其他字段为空字符串/零值，
+            # 走 from_inner_object 会在 status/artifactType 等 Enum 字段上触发
+            # 伪校验错误。这里直接构造一个只带 id 的极简对象。
+            return AgentRuntime.model_construct(
+                agent_runtime_id=result.agent_runtime_id
+            )
         except HTTPError as e:
             raise e.to_resource_error("AgentRuntime", id) from e
 

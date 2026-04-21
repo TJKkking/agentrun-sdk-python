@@ -113,6 +113,21 @@ from agentrun.sandbox import (
     SandboxClient,
     Template,
 )
+# Super Agent
+from agentrun.super_agent import (
+    ConversationInfo,
+    InvokeResponseData,
+    InvokeStream,
+)
+from agentrun.super_agent import Message as SuperAgentMessage
+from agentrun.super_agent import (
+    SSEEvent,
+    SuperAgent,
+    SuperAgentClient,
+    SuperAgentCreateInput,
+    SuperAgentListInput,
+    SuperAgentUpdateInput,
+)
 # Tool
 from agentrun.tool import Tool as ToolResource
 from agentrun.tool import ToolClient as ToolResourceClient
@@ -248,6 +263,20 @@ __all__ = [
     "ModelProxyCreateInput",
     "ModelProxyUpdateInput",
     "ModelProxyListInput",
+    ######## Super Agent ########
+    # base
+    "SuperAgent",
+    "SuperAgentClient",
+    # inner model
+    "InvokeStream",
+    "SSEEvent",
+    "ConversationInfo",
+    "SuperAgentMessage",
+    # api model
+    "SuperAgentCreateInput",
+    "SuperAgentUpdateInput",
+    "SuperAgentListInput",
+    "InvokeResponseData",
     ######## Sandbox ########
     "SandboxClient",
     "BrowserSandbox",
